@@ -1324,25 +1324,29 @@ fn from_content(content: &Value, images: &mut Vec<Value>, failed: bool) -> Value
     if failed {
         return json!({"content": blocks, "error": {"message": message}});
     }
-    // A JSON body, then a Computer Use outline as plain text (the tree a look
-    // returns) and images: the outline back under `tree`, the images in `images`.
+    // A JSON body, then Computer Use outlines (text blocks marked with where
+    // they were in the result) and images: each outline back in its place, the
+    // images in `images`.
+    let outline = |block: &Value| -> Option<String> {
+        block["_meta"][cmux_computer_use::engine::OUTLINE_META].as_str().map(str::to_owned)
+    };
     if let Some(mut body) = json_body
         && blocks.len() > 1
-        && blocks.iter().skip(1).all(|block| block["type"] == "image" || block["type"] == "text")
+        && blocks.iter().skip(1).all(|block| block["type"] == "image" || outline(block).is_some())
         && body.get("images").is_none()
-        && body.get("tree").is_none()
     {
-        let texts: Vec<&str> = blocks
-            .iter()
-            .skip(1)
-            .filter(|block| block["type"] == "text")
-            .filter_map(|block| block["text"].as_str())
-            .collect();
-        if !texts.is_empty() {
-            body.set("tree", json!(texts.join("\n")));
+        let mut images = Vec::new();
+        for block in blocks.into_iter().skip(1) {
+            match (outline(&block), block["text"].as_str()) {
+                (Some(place), Some(text)) => match place.as_str() {
+                    "state.tree" if body["state"].is_object() => {
+                        body["state"].set("tree", json!(text))
+                    }
+                    _ => body.set("tree", json!(text)),
+                },
+                _ => images.push(block),
+            }
         }
-        let images: Vec<Value> =
-            blocks.into_iter().skip(1).filter(|block| block["type"] == "image").collect();
         if !images.is_empty() {
             body.set("images", Value::Array(images));
         }

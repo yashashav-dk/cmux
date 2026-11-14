@@ -158,6 +158,9 @@ pub struct Element {
     /// A menu item shows a check mark (or another mark).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checked: bool,
+    /// A row, tab or item is selected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub selected: bool,
     /// The platform's identity for the element, equal across two trees of a
     /// window exactly when it is the same element (macOS: the AXUIElement's
     /// hash; Linux: its AT-SPI object). The engine matches elements by it to

@@ -135,7 +135,7 @@ fn an_unknown_or_gone_id_is_refused_and_says_to_look_again() {
     e.call(&ctx(), "get_ui_tree", &json!({"window_id": "1"}));
     let out = e.call(&ctx(), "click", &json!({"window_id": "1", "element_id": "99"}));
     assert_eq!(out.code.as_deref(), Some("stale_element"));
-    assert!(out.body["error"].as_str().unwrap().contains("does not belong to window 1"));
+    assert!(out.body["error"].as_str().unwrap().contains("is not in window 1"));
     // Save goes away; its id is refused by name.
     let mut gone = form(2, false, false, "");
     gone.children.remove(1);
@@ -252,4 +252,28 @@ fn a_retried_call_forgets_the_look_so_the_next_is_whole() {
     e.call(&c, "click", &json!({"window_id": "1", "element_id": "e1"}));
     let look = e.call(&ctx(), "get_ui_tree", &json!({"window_id": "1"}));
     assert!(tree_text(&look).starts_with("[1] window"), "{}", tree_text(&look));
+}
+
+#[test]
+fn a_scripts_json_look_is_not_the_models_last_look() {
+    let (d, e) = rig();
+    e.call(&ctx(), "get_ui_tree", &json!({"window_id": "1", "format": "json"}));
+    set_tree(&d, form(2, false, false, "Ada"));
+    // The model never read the tree: its first own look is whole.
+    let look = e.call(&ctx(), "get_ui_tree", &json!({"window_id": "1"}));
+    assert!(tree_text(&look).starts_with("[1] window"), "{}", tree_text(&look));
+}
+
+#[test]
+fn an_id_from_another_window_names_its_window() {
+    let (d, e) = rig();
+    e.call(&ctx(), "get_ui_tree", &json!({"window_id": "1"}));
+    // Window 2 is 1Password, denied by default: use a config without a deny list.
+    let _ = d;
+    e.set_config(PolicyConfig { denied_apps: vec![], ..PolicyConfig::default() });
+    e.call(&ctx(), "get_ui_tree", &json!({"window_id": "2"}));
+    let out = e.call(&ctx(), "click", &json!({"window_id": "2", "element_id": "3"}));
+    assert_eq!(out.code.as_deref(), Some("stale_element"), "{}", out.body);
+    let msg = out.body["error"].as_str().unwrap();
+    assert!(msg.contains("belongs to window 1, not window 2"), "{msg}");
 }

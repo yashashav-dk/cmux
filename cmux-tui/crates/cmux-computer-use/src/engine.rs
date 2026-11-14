@@ -59,6 +59,10 @@ pub struct CallContext {
     pub tag: Option<String>,
 }
 
+/// The `_meta` key of an MCP text block that holds a look's outline, and
+/// where in the result's JSON it was (`tree` or `state.tree`).
+pub const OUTLINE_META: &str = "cmux/outline";
+
 /// A tool's result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolOutput {
@@ -94,19 +98,19 @@ impl ToolOutput {
     /// quoted inside JSON every line break and quote would be escaped.
     pub fn to_mcp(&self) -> Value {
         let mut body = self.body.clone();
-        let mut texts: Vec<String> = Vec::new();
-        let mut take = |o: Option<&mut serde_json::Map<String, Value>>| {
-            if let Some(o) = o
-                && let Some(Value::String(t)) = o.remove("tree")
-            {
-                texts.push(t);
-            }
-        };
-        take(body.as_object_mut());
-        take(body.get_mut("state").and_then(Value::as_object_mut));
+        let mut texts: Vec<(&str, String)> = Vec::new();
+        if let Some(Value::String(t)) = body.as_object_mut().and_then(|o| o.remove("tree")) {
+            texts.push(("tree", t));
+        }
+        if let Some(Value::String(t)) =
+            body.get_mut("state").and_then(Value::as_object_mut).and_then(|o| o.remove("tree"))
+        {
+            texts.push(("state.tree", t));
+        }
         let mut content = vec![json!({"type": "text", "text": body.to_string()})];
-        for t in texts {
-            content.push(json!({"type": "text", "text": t}));
+        // `_meta` says where the text came from, so a script gets it back in place.
+        for (from, t) in texts {
+            content.push(json!({"type": "text", "text": t, "_meta": {OUTLINE_META: from}}));
         }
         if let Some(png) = &self.png_base64 {
             content.push(json!({"type": "image", "data": png, "mimeType": "image/png"}));
@@ -507,6 +511,7 @@ impl Engine {
             && args.get("observe").and_then(Value::as_bool) != Some(false))
         .then(|| args_str(&args, "window_id").and_then(|id| self.app_windows(id)))
         .flatten();
+        let acted = self.acted_id(&args);
         let raising = self.foreground_begin(tool, &args);
         let mut guard = self.focus_begin(&ctx.session, tool, &args);
         let (mut out, app) = match self.dispatch(tool, ctx, &args) {
@@ -545,7 +550,7 @@ impl Engine {
         // The state as the model reads it: the outline of what changed, and
         // the app's windows that opened or closed (a batch's and a wait's too).
         if !out.is_error && out.body.get("state").is_some() {
-            self.present_state(ctx, &args, &mut out, app_windows_before.as_ref());
+            self.present_state(ctx, &args, &mut out, app_windows_before.as_ref(), acted);
         }
         if let Some(g) = &guard {
             focus = Some(self.focus_after_settle(g, focus));
@@ -731,6 +736,7 @@ impl Engine {
                     &mut body,
                     Vec::new(),
                     None,
+                    false,
                 );
                 Ok((ToolOutput::ok(Value::Object(body)), Some(app)))
             }

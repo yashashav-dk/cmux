@@ -365,7 +365,7 @@ pub fn window_states(pid: i32) -> HashMap<u32, (String, bool)> {
     out
 }
 
-const NODE_ATTRS: [&str; 16] = [
+const NODE_ATTRS: [&str; 17] = [
     "AXRole",
     "AXSubrole",
     "AXTitle",
@@ -382,6 +382,7 @@ const NODE_ATTRS: [&str; 16] = [
     "AXMenuItemCmdChar",
     "AXMenuItemCmdModifiers",
     "AXMenuItemMarkChar",
+    "AXSelected",
 ];
 
 struct Walk {
@@ -471,6 +472,7 @@ impl Walk {
                 v[14].as_ref().and_then(Cf::as_i64).unwrap_or(0),
             ),
             checked: !text(&v[15]).trim().is_empty(),
+            selected: v[16].as_ref().and_then(Cf::as_bool).unwrap_or(false),
             identity: Some(ax.identity()),
             children: Vec::new(),
         };

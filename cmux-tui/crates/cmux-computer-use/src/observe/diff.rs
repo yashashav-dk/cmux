@@ -52,6 +52,7 @@ fn same(a: &Line, b: &Line, opts: &Options) -> bool {
         && a.focused == b.focused
         && a.disabled == b.disabled
         && a.checked == b.checked
+        && a.selected == b.selected
         && a.actions == b.actions
         && a.parent == b.parent
         && (!opts.frames || a.frame == b.frame)
@@ -153,6 +154,9 @@ fn changed_line(new: &Line, old: &Line, opts: &Options) -> String {
     }
     if old.checked != new.checked {
         was.push(if old.checked { "checked" } else { "unchecked" }.into());
+    }
+    if old.selected != new.selected {
+        was.push(if old.selected { "selected" } else { "not selected" }.into());
     }
     if old.shortcut != new.shortcut {
         was.push(if old.shortcut.is_empty() { "no shortcut".into() } else { old.shortcut.clone() });

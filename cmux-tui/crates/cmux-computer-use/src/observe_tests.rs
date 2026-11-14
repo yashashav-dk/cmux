@@ -50,13 +50,14 @@ fn form(platform_gen: u32, rows: &[&str]) -> Element {
 #[test]
 fn ids_are_small_and_stay_the_same_across_walks_with_new_platform_ids() {
     let mut w = WindowIds::default();
+    let mut n = 0u32;
     let mut a = tree(form(1, &["Alpha", "Beta"]));
-    w.assign(&mut a, false);
+    w.assign(&mut a, false, &mut n);
     assert_eq!(a.root.id, "1");
     let (save, beta) = (id_of(&a, "Save"), id_of(&a, "Beta"));
     // The next walk: every platform id differs (a new generation), nothing moved.
     let mut b = tree(form(2, &["Alpha", "Beta"]));
-    w.assign(&mut b, false);
+    w.assign(&mut b, false, &mut n);
     assert_eq!(id_of(&b, "Save"), save);
     assert_eq!(id_of(&b, "Beta"), beta);
     assert_eq!(w.resolve(save), Resolved::Current(w.entry(save).unwrap().clone()));
@@ -66,15 +67,16 @@ fn ids_are_small_and_stay_the_same_across_walks_with_new_platform_ids() {
 #[test]
 fn a_row_inserted_above_keeps_each_rows_id_with_its_text() {
     let mut w = WindowIds::default();
+    let mut n = 0u32;
     let mut a = tree(form(1, &["Alpha", "Beta"]));
-    w.assign(&mut a, false);
+    w.assign(&mut a, false, &mut n);
     let row_of = |t: &UiTree, text: &str| -> String {
         let list = &t.root.children[2];
         list.children.iter().find(|r| r.children[0].name == text).unwrap().id.clone()
     };
     let (alpha_row, beta_row) = (row_of(&a, "Alpha"), row_of(&a, "Beta"));
     let mut b = tree(form(2, &["New", "Alpha", "Beta"]));
-    w.assign(&mut b, false);
+    w.assign(&mut b, false, &mut n);
     // Positional matching would have handed Alpha's id to the new first row.
     assert_eq!(row_of(&b, "Alpha"), alpha_row);
     assert_eq!(row_of(&b, "Beta"), beta_row);
@@ -85,6 +87,7 @@ fn a_row_inserted_above_keeps_each_rows_id_with_its_text() {
 #[test]
 fn platform_identity_keeps_an_id_through_a_rename() {
     let mut w = WindowIds::default();
+    let mut n = 0u32;
     let root = |name: &str, gen_: u32| {
         with(
             el(&format!("{gen_}.0"), "window", "W"),
@@ -92,24 +95,25 @@ fn platform_identity_keeps_an_id_through_a_rename() {
         )
     };
     let mut a = tree(root("Play", 1));
-    w.assign(&mut a, false);
+    w.assign(&mut a, false, &mut n);
     let play = id_of(&a, "Play");
     let mut b = tree(root("Pause", 2));
-    w.assign(&mut b, false);
+    w.assign(&mut b, false, &mut n);
     assert_eq!(id_of(&b, "Pause"), play);
 }
 
 #[test]
 fn ids_are_never_reused_and_a_gone_id_says_what_it_was() {
     let mut w = WindowIds::default();
+    let mut n = 0u32;
     let mut a = tree(form(1, &["Alpha"]));
-    w.assign(&mut a, false);
+    w.assign(&mut a, false, &mut n);
     let save = id_of(&a, "Save");
     let mut b = tree(with(el("2.0", "window", "Form"), vec![el("2.1", "text_field", "Name")]));
-    w.assign(&mut b, false);
+    w.assign(&mut b, false, &mut n);
     assert_eq!(w.resolve(save), Resolved::Gone("button \"Save\"".into()));
     let mut c = tree(form(3, &["Alpha"]));
-    w.assign(&mut c, false);
+    w.assign(&mut c, false, &mut n);
     assert_ne!(id_of(&c, "Save"), save, "a returning element is new");
     assert_eq!(w.resolve(9999), Resolved::Unknown);
 }
@@ -117,6 +121,7 @@ fn ids_are_never_reused_and_a_gone_id_says_what_it_was() {
 #[test]
 fn menu_bar_ids_are_carried_through_a_walk_without_menus() {
     let mut w = WindowIds::default();
+    let mut n = 0u32;
     let menus = |g: u32| {
         with(
             el(&format!("{g}.9"), "menu_bar", ""),
@@ -130,13 +135,13 @@ fn menu_bar_ids_are_carried_through_a_walk_without_menus() {
         )
     };
     let mut a = tree(with(el("1.0", "window", "W"), vec![el("1.1", "button", "OK"), menus(1)]));
-    w.assign(&mut a, true);
+    w.assign(&mut a, true, &mut n);
     let save_as = id_of(&a, "Save As…");
     let mut b = tree(with(el("2.0", "window", "W"), vec![el("2.1", "button", "OK")]));
-    w.assign(&mut b, false);
+    w.assign(&mut b, false, &mut n);
     assert!(matches!(w.resolve(save_as), Resolved::Carried(_)), "kept, but its platform id is old");
     let mut c = tree(with(el("3.0", "window", "W"), vec![el("3.1", "button", "OK"), menus(3)]));
-    w.assign(&mut c, true);
+    w.assign(&mut c, true, &mut n);
     assert_eq!(id_of(&c, "Save As…"), save_as);
     assert!(matches!(w.resolve(save_as), Resolved::Current(e) if e.platform_id == "3.12"));
 }
@@ -259,7 +264,8 @@ fn typing_is_refused_when_focus_is_on_a_button_or_nowhere_with_fields_around() {
     );
     button.focused = false;
     let root = with(el("1", "window", "W"), vec![field.clone(), button.clone()]);
-    assert_eq!(guards::typing_without_target("7", &root, false).unwrap().code, "no_keyboard_focus");
+    // No reported focus is let through (a background window often reports none).
+    assert!(guards::typing_without_target("7", &root, false).is_none());
     // A window with no text fields (a canvas, a terminal) is let through.
     let canvas = with(el("1", "window", "W"), vec![el("2", "canvas", "")]);
     assert!(guards::typing_without_target("7", &canvas, false).is_none());
@@ -327,4 +333,78 @@ fn disabled_and_non_text_targets_are_refused() {
     assert_eq!(guards::disabled(&b).unwrap().code, "element_disabled");
     assert_eq!(guards::typing_into(&b).unwrap().code, "not_a_text_field");
     assert!(guards::typing_into(&el("2", "text_area", "")).is_none());
+}
+
+#[test]
+fn an_unnamed_element_inserted_above_never_takes_an_id_that_is_still_there() {
+    // Two unnamed fields with platform identities; a third is inserted first.
+    let field = |id: &str, h: u64| ident(el(id, "text_field", ""), h);
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(with(el("1.0", "window", "W"), vec![field("1.1", 11), field("1.2", 12)]));
+    w.assign(&mut a, false, &mut n);
+    let (x, y) = (a.root.children[0].id.clone(), a.root.children[1].id.clone());
+    let mut b = tree(with(
+        el("2.0", "window", "W"),
+        vec![field("2.9", 99), field("2.1", 11), field("2.2", 12)],
+    ));
+    w.assign(&mut b, false, &mut n);
+    assert_eq!(b.root.children[1].id, x, "X keeps its id");
+    assert_eq!(b.root.children[2].id, y, "Y keeps its id");
+    assert_ne!(b.root.children[0].id, x);
+    assert_ne!(b.root.children[0].id, y);
+}
+
+#[test]
+fn a_recycled_row_with_other_text_is_a_new_row() {
+    let row = |id: &str, text: &str| {
+        ident(with(el(id, "row", ""), vec![el(&format!("{id}t"), "text", text)]), 7)
+    };
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(with(el("1.0", "window", "W"), vec![row("1.1", "Alpha")]));
+    w.assign(&mut a, false, &mut n);
+    let alpha = a.root.children[0].id.clone();
+    // The same AppKit view now shows another row (same hash, other text).
+    let mut b = tree(with(el("2.0", "window", "W"), vec![row("2.1", "Omega")]));
+    w.assign(&mut b, false, &mut n);
+    assert_ne!(b.root.children[0].id, alpha);
+}
+
+#[test]
+fn ids_are_unique_across_windows_and_say_whose_they_are() {
+    let mut r = ids::Registry::default();
+    let mut a = tree(form(1, &["Alpha"]));
+    let mut b = tree(form(1, &["Alpha"]));
+    r.assign("w1", &mut a, false);
+    r.assign("w2", &mut b, false);
+    let save_a = id_of(&a, "Save");
+    assert_ne!(save_a, id_of(&b, "Save"));
+    assert_eq!(r.window("w2").unwrap().resolve(save_a), Resolved::Unknown);
+    assert_eq!(r.owner(save_a), Some("w1"));
+}
+
+#[test]
+fn a_walk_cut_at_the_limit_keeps_the_ids_it_did_not_reach() {
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(form(1, &["Alpha", "Beta"]));
+    w.assign(&mut a, false, &mut n);
+    let beta = id_of(&a, "Beta");
+    let mut cut = tree(with(el("2.0", "window", "Form"), vec![el("2.1", "text_field", "Name")]));
+    cut.truncated = true;
+    w.assign(&mut cut, false, &mut n);
+    assert!(matches!(w.resolve(beta), Resolved::Carried(_)), "not buried");
+}
+
+#[test]
+fn a_selection_change_is_a_change() {
+    let mut before = sample();
+    before.children.push(el("30", "row", "Inbox"));
+    let mut after = before.clone();
+    after.children[4].selected = true;
+    let opts = Options::default();
+    let (a, b) = (outline::build(&before, false, &opts), outline::build(&after, false, &opts));
+    let text = diff::render(&a, &b, &diff::compute(&a, &b, &opts), &opts).unwrap();
+    assert_eq!(text, "~ [30] row \"Inbox\" selected (was: not selected)");
 }

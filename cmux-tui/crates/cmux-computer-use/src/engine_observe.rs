@@ -51,7 +51,7 @@ impl Engine {
     ) -> Result<UiTree, DesktopError> {
         let _walking = lock(&self.observe.walking);
         let mut tree = self.desktop.ui_tree(window_id, options)?;
-        lock(&self.observe.ids).window_mut(window_id).assign(&mut tree, options.menus);
+        lock(&self.observe.ids).assign(window_id, &mut tree, options.menus);
         Ok(tree)
     }
 
@@ -106,11 +106,19 @@ impl Engine {
         body: &mut serde_json::Map<String, Value>,
         windows: Vec<String>,
         menu_only: Option<u32>,
+        pixels_changed: bool,
     ) {
         let opts = look.outline_options();
         let new = outline::build(root, truncated, &opts);
-        let old = lock(&self.observe.seen)
-            .insert((session.to_string(), window_id.to_string()), new.clone());
+        let key = (session.to_string(), window_id.to_string());
+        let menus = menu_only.map(|acted| open_menus(root, acted)).unwrap_or_default();
+        // What the model reads becomes its last look: not a script's JSON,
+        // and not a menu-only look, which showed only the menu.
+        let old = if look.json || !menus.is_empty() {
+            lock(&self.observe.seen).get(&key).cloned()
+        } else {
+            lock(&self.observe.seen).insert(key, new.clone())
+        };
         if look.json {
             body.insert("root".into(), serde_json::to_value(root).unwrap_or(Value::Null));
             body.insert("frames_in".into(), json!("screenshot pixels"));
@@ -120,7 +128,6 @@ impl Engine {
             return;
         }
         let mut parts: Vec<String> = windows;
-        let menus = menu_only.map(|acted| open_menus(root, acted)).unwrap_or_default();
         if !menus.is_empty() {
             let mut text = String::from(
                 "The menu is open; only it is shown. Click an item's id (or perform_action press) to choose it, or press_key Escape to close it.",
@@ -137,6 +144,9 @@ impl Engine {
                 Some(old) => {
                     let changes = diff::compute(&old, &new, &opts);
                     match diff::render(&old, &new, &changes, &opts) {
+                        None if pixels_changed => parts.push(format!(
+                            "No change in window {window_id}'s elements since your last look, but its pixels changed (see the screenshot): something the tree does not describe moved, such as scrolled or drawn content."
+                        )),
                         None => parts.push(format!(
                             "No change in window {window_id}'s elements since your last look (full: true shows the whole tree)."
                         )),
@@ -163,6 +173,7 @@ impl Engine {
         args: &Value,
         out: &mut ToolOutput,
         before: Option<&AppWindows>,
+        acted: Option<u32>,
     ) {
         let Some(window_id) = args_str(args, "window_id") else { return };
         let menu_open = out.body.pointer("/menu/state") == Some(&json!("open"));
@@ -175,12 +186,9 @@ impl Engine {
         match root {
             Some(root) => {
                 let truncated = state.get("truncated").and_then(Value::as_bool).unwrap_or(false);
-                // The element the action opened a menu from, by its small id.
-                let acted = args_str(args, "element_id").and_then(|raw| {
-                    ids::parse(raw).or_else(|| {
-                        lock(&self.observe.ids).window(window_id).and_then(|w| w.id_of(raw))
-                    })
-                });
+                let pixels_changed = state.get("unchanged") == Some(&json!(false));
+                // Named before the action, else by the desktop id the state walk gave it.
+                let acted = acted.or_else(|| self.acted_id(args));
                 let shown_menu = menu_open && !open_menus(&root, acted.unwrap_or(0)).is_empty();
                 if !look.json {
                     for key in ["frames_in", "coordinates", "target", "captures"] {
@@ -204,6 +212,7 @@ impl Engine {
                     &mut state,
                     windows,
                     shown_menu.then_some(acted.unwrap_or(0)),
+                    pixels_changed,
                 );
                 // The outline lists the open menu's items with their ids.
                 if shown_menu
@@ -221,6 +230,14 @@ impl Engine {
         out.body["state"] = Value::Object(state);
     }
 
+    /// The small id of the element an acting call names, taken before it acts
+    /// (the state walk after it gives the desktop's ids anew).
+    pub(super) fn acted_id(&self, args: &Value) -> Option<u32> {
+        let raw = args_str(args, "element_id")?;
+        ids::parse(raw)
+            .or_else(|| lock(&self.observe.ids).window(args_str(args, "window_id")?)?.id_of(raw))
+    }
+
     /// The desktop's id for an agent's `[n]`, walking the window again when
     /// the id is a menu bar element of an earlier walk.
     fn resolve_small(&self, window: &Window, n: u32) -> Result<String, ToolOutput> {
@@ -232,7 +249,8 @@ impl Engine {
         };
         let mut r = resolved(self);
         if matches!(r, ids::Resolved::Carried(_)) {
-            self.walk_tree(&window.id, TreeOptions::default())
+            // Carried from a walk with the menus, or past a walk's limit.
+            self.walk_tree(&window.id, TreeOptions { max_nodes: 5000, ..TreeOptions::default() })
                 .map_err(|e| ToolOutput::desktop(&e))?;
             r = resolved(self);
         }
@@ -242,10 +260,19 @@ impl Engine {
                 "element [{n}] ({what}) is no longer in window {}: it closed or was replaced after the state you read it from. Use an id from the latest state of this window, or call get_ui_tree.",
                 window.id
             ))),
-            ids::Resolved::Carried(_) | ids::Resolved::Unknown => Err(stale(format!(
-                "element [{n}] does not belong to window {}: ids belong to one window and come from its get_ui_tree or an action's state. Call get_ui_tree on window {} for its ids.",
-                window.id, window.id
-            ))),
+            ids::Resolved::Carried(_) | ids::Resolved::Unknown => {
+                let owner = lock(&self.observe.ids).owner(n).map(str::to_string);
+                Err(stale(match owner {
+                    Some(other) if other != window.id => format!(
+                        "element [{n}] belongs to window {other}, not window {}: pass window_id {other}, or call get_ui_tree on window {} for its own ids.",
+                        window.id, window.id
+                    ),
+                    _ => format!(
+                        "element [{n}] is not in window {}: ids come from its get_ui_tree or an action's state. Call get_ui_tree on window {} for its ids.",
+                        window.id, window.id
+                    ),
+                }))
+            }
         }
     }
 

@@ -94,7 +94,6 @@ pub enum Resolved {
 
 #[derive(Default)]
 pub struct WindowIds {
-    next: u32,
     walk: u64,
     entries: HashMap<u32, Entry>,
     by_platform: HashMap<String, u32>,
@@ -114,6 +113,24 @@ struct Flat {
     nth: usize,
     menu_bar: bool,
 }
+
+/// Roles whose views AppKit recycles for other content (table and outline
+/// rows and cells): the same identity with another label is another item.
+const RECYCLED_ROLES: &[&str] = &[
+    "row",
+    "cell",
+    "outline_row",
+    "list_item",
+    "list item",
+    "item",
+    "tree_item",
+    "data_item",
+    "table_row",
+    "table row",
+    "table_cell",
+    "table cell",
+    "column",
+];
 
 /// Roles an unnamed element of which is told apart by the text inside it.
 const ITEM_ROLES: &[&str] = &[
@@ -223,9 +240,11 @@ impl WindowIds {
     }
 
     /// Gives every element of `tree` its id (rewriting `tree`'s ids in place)
-    /// and records the walk. `menus`: the walk read the app's menu bar; when
-    /// it did not, the menu bar's ids of an earlier walk are kept, carried.
-    pub fn assign(&mut self, tree: &mut UiTree, menus: bool) {
+    /// and records the walk. New ids come from `next`, shared by every window,
+    /// so an id names one element of one window, ever. `menus`: the walk read
+    /// the app's menu bar; when it did not, or the walk was cut at the element
+    /// limit, earlier ids it did not reach are kept, carried, never buried.
+    pub fn assign(&mut self, tree: &mut UiTree, menus: bool, next: &mut u32) {
         self.walk += 1;
         let walk = self.walk;
         let old = std::mem::take(&mut self.entries);
@@ -251,49 +270,76 @@ impl WindowIds {
             }
         }
         let flat = flatten(&tree.root);
-        let mut ids: Vec<u32> = Vec::with_capacity(flat.len());
+        let mut ids: Vec<Option<u32>> = vec![None; flat.len()];
         let mut taken: HashSet<u32> = HashSet::new();
-        let mut entries: HashMap<u32, Entry> = HashMap::with_capacity(flat.len());
-        for (f, e) in &flat {
-            let parent = f.parent.map(|p| ids[p]);
-            let free = |id: &u32| !taken.contains(id);
-            let found = if f.parent.is_none() {
-                old_root.filter(|(_, role)| *role == e.role).map(|(id, _)| id).filter(free)
-            } else {
-                None
-            }
-            .or_else(|| {
-                e.identity.and_then(|h| {
-                    by_identity.get(&(h, e.role.as_str()))?.iter().copied().find(|id| free(id))
-                })
-            })
-            .or_else(|| {
-                (!e.identifier.is_empty())
-                    .then(|| by_ident.get(&(parent, e.role.as_str(), e.identifier.as_str())))
-                    .flatten()
-                    .and_then(|v| v.iter().copied().find(|id| free(id)))
-            })
-            .or_else(|| {
-                by_key
-                    .get(&(parent, e.role.clone(), f.label.clone(), f.nth))
-                    .copied()
-                    .filter(|id| free(id))
-            });
-            let id = match found {
-                Some(id) => id,
-                None => {
-                    self.next += 1;
-                    self.next
+        // Pass 1: the platform's identity, for every node first, so a new
+        // element's fallback match can never take the id of one that is still
+        // there. An item (a row, a button) must also show the same label: a
+        // view AppKit recycles for another row keeps its address.
+        for (i, (f, e)) in flat.iter().enumerate() {
+            if f.parent.is_none() {
+                if let Some((id, role)) = old_root
+                    && role == e.role
+                {
+                    ids[i] = Some(id);
+                    taken.insert(id);
                 }
+                continue;
+            }
+            let Some(h) = e.identity else { continue };
+            let found = by_identity.get(&(h, e.role.as_str())).and_then(|v| {
+                v.iter().copied().find(|id| {
+                    !taken.contains(id)
+                        && (!RECYCLED_ROLES.contains(&e.role.as_str())
+                            || old.get(id).is_some_and(|o| o.label == f.label))
+                })
+            });
+            if let Some(id) = found {
+                ids[i] = Some(id);
+                taken.insert(id);
+            }
+        }
+        // Pass 2: the identifier, then parent, role, label and position, over
+        // the ids pass 1 left free and never onto an element whose identity
+        // is known and differs; parents come before their children.
+        for (i, (f, e)) in flat.iter().enumerate() {
+            if ids[i].is_some() {
+                continue;
+            }
+            let parent = f.parent.and_then(|p| ids[p]);
+            let fits = |id: &u32| {
+                !taken.contains(id)
+                    && match (e.identity, old.get(id).and_then(|o| o.identity)) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => true,
+                    }
             };
+            let found = (!e.identifier.is_empty())
+                .then(|| by_ident.get(&(parent, e.role.as_str(), e.identifier.as_str())))
+                .flatten()
+                .and_then(|v| v.iter().copied().find(|id| fits(id)))
+                .or_else(|| {
+                    by_key
+                        .get(&(parent, e.role.clone(), f.label.clone(), f.nth))
+                        .copied()
+                        .filter(|id| fits(id))
+                });
+            let id = found.unwrap_or_else(|| {
+                *next += 1;
+                *next
+            });
             taken.insert(id);
-            ids.push(id);
+            ids[i] = Some(id);
+        }
+        let ids: Vec<u32> = ids.into_iter().map(|id| id.unwrap_or_default()).collect();
+        let mut entries: HashMap<u32, Entry> = HashMap::with_capacity(flat.len());
+        for (i, (f, e)) in flat.iter().enumerate() {
             entries.insert(
-                id,
+                ids[i],
                 Entry {
                     platform_id: e.id.clone(),
                     walk,
-                    parent,
+                    parent: f.parent.map(|p| ids[p]),
                     role: e.role.clone(),
                     name: e.name.clone(),
                     value: e.value.clone(),
@@ -309,19 +355,20 @@ impl WindowIds {
                 },
             );
         }
+        let has_menu_bar = flat.iter().any(|(f, _)| f.menu_bar);
         for (id, e) in old {
             if taken.contains(&id) {
                 continue;
             }
-            if !menus && e.menu_bar {
+            if (e.menu_bar && !(menus && has_menu_bar)) || tree.truncated {
                 entries.insert(id, e);
             } else {
                 self.bury(id, e.summary());
             }
         }
         // Rewrite the tree's ids to the small ones, in the same pre-order.
-        let mut next = ids.iter();
-        rewrite(&mut tree.root, &mut next);
+        let mut order = ids.iter();
+        rewrite(&mut tree.root, &mut order);
         self.by_platform = entries
             .iter()
             .filter(|(_, e)| e.walk == walk)
@@ -329,7 +376,7 @@ impl WindowIds {
             .collect();
         self.entries = entries;
         self.truncated = tree.truncated;
-        if menus {
+        if menus && has_menu_bar {
             self.menu_bar = tree.root.children.iter().find(|c| c.role == MENU_BAR).cloned();
         }
         self.tree = Some(tree.root.clone());
@@ -412,15 +459,16 @@ fn rewrite(e: &mut Element, ids: &mut std::slice::Iter<'_, u32>) {
     }
 }
 
-/// Every window's ids.
+/// Every window's ids, from one counter: an id is never reused, in any window.
 #[derive(Default)]
 pub struct Registry {
     windows: HashMap<String, WindowIds>,
     order: VecDeque<String>,
+    next: u32,
 }
 
 impl Registry {
-    pub fn window_mut(&mut self, window_id: &str) -> &mut WindowIds {
+    fn touch(&mut self, window_id: &str) {
         self.order.retain(|w| w != window_id);
         self.order.push_back(window_id.to_string());
         while self.order.len() > MAX_WINDOWS {
@@ -428,10 +476,25 @@ impl Registry {
                 self.windows.remove(&old);
             }
         }
-        self.windows.entry(window_id.to_string()).or_default()
+    }
+
+    /// Gives a walk of `window_id` its ids ([`WindowIds::assign`]).
+    pub fn assign(&mut self, window_id: &str, tree: &mut UiTree, menus: bool) {
+        self.touch(window_id);
+        let mut next = self.next;
+        self.windows.entry(window_id.to_string()).or_default().assign(tree, menus, &mut next);
+        self.next = next;
     }
 
     pub fn window(&self, window_id: &str) -> Option<&WindowIds> {
         self.windows.get(window_id)
+    }
+
+    /// The window whose latest tree, or an earlier one, had `id`.
+    pub fn owner(&self, id: u32) -> Option<&str> {
+        self.windows
+            .iter()
+            .find(|(_, w)| w.entries.contains_key(&id) || w.gone.contains_key(&id))
+            .map(|(k, _)| k.as_str())
     }
 }

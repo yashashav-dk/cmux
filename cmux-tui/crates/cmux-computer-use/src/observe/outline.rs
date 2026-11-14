@@ -53,6 +53,7 @@ pub struct Line {
     pub focused: bool,
     pub disabled: bool,
     pub checked: bool,
+    pub selected: bool,
     /// Actions beyond a plain press.
     pub actions: Vec<String>,
     pub frame: Option<Rect>,
@@ -189,7 +190,7 @@ fn shows_identifier(id: &str) -> bool {
 
 /// Whether a node is only layout: folded, its children shown in its place.
 fn folds(e: &Element, parent_label: &str) -> bool {
-    if e.focused {
+    if e.focused || e.selected {
         return false;
     }
     let bare = e.name.trim().is_empty()
@@ -268,6 +269,7 @@ fn visit(
             focused: e.focused,
             disabled: e.disabled,
             checked: e.checked,
+            selected: e.selected,
             actions: secondary_actions(&e.actions),
             frame: e.frame,
             menu_bar,
@@ -334,6 +336,9 @@ pub fn line_text_with(l: &Line, opts: &Options, value: Option<String>) -> String
     }
     if l.checked {
         s.push_str(" checked");
+    }
+    if l.selected {
+        s.push_str(" selected");
     }
     if l.focused {
         s.push_str(" focused");

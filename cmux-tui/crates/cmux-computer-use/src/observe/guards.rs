@@ -132,10 +132,11 @@ fn text_inputs(root: &Element, max: usize) -> Vec<&Element> {
 }
 
 /// type_text with no element_id: the text goes to the window's focused
-/// element. Refused when that is a control that takes no text, or when no
-/// element has focus though the window has text fields (the keys would go
-/// nowhere, or to whatever the app picks).
-pub fn typing_without_target(window: &str, root: &Element, truncated: bool) -> Option<Refusal> {
+/// element. Refused when that is a control that takes no text (Space would
+/// press it). No reported focus is let through: a background window or a
+/// custom view (a terminal, a canvas) often reports none and still types; the
+/// state after typing shows whether anything changed.
+pub fn typing_without_target(window: &str, root: &Element, _truncated: bool) -> Option<Refusal> {
     let fields = text_inputs(root, 4);
     let list =
         fields.iter().map(|e| format!("[{}] {}", e.id, named(e))).collect::<Vec<_>>().join(", ");
@@ -147,12 +148,6 @@ pub fn typing_without_target(window: &str, root: &Element, truncated: bool) -> O
                 f.id,
                 named(f),
                 if list.is_empty() { String::new() } else { format!(" ({list})") }
-            ),
-        ),
-        None if !fields.is_empty() && !truncated => refuse(
-            "no_keyboard_focus",
-            format!(
-                "no element of window {window} has keyboard focus, so typed text would go nowhere you can check. Pass element_id of the field to type into ({list}), which focuses it first through accessibility, or click the field first."
             ),
         ),
         _ => None,
