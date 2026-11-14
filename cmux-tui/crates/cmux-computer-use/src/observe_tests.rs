@@ -456,3 +456,16 @@ fn an_insertion_into_a_value_cut_at_the_limit_shows_what_was_typed() {
 fn quotes_drop_direction_marks() {
     assert_eq!(outline::quote("\u{200e}7"), "\"7\"");
 }
+
+#[test]
+fn menu_shortcuts_read_as_press_key_combos() {
+    use outline::menu_shortcut as s;
+    assert_eq!(s("S", 0), "cmd+s");
+    assert_eq!(s("S", 1), "cmd+shift+s");
+    assert_eq!(s("T", 2 | 1), "cmd+alt+shift+t");
+    assert_eq!(s("F", 4 | 8), "ctrl+f");
+    assert_eq!(s("+", 0), "cmd+plus");
+    assert_eq!(s("\u{F704}", 8), "F1");
+    assert_eq!(s("\u{F700}", 0), "cmd+Up");
+    assert_eq!(s("", 0), "");
+}

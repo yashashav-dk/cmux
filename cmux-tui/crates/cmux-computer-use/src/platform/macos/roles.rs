@@ -169,50 +169,6 @@ pub fn same_title(a: &str, b: &str) -> bool {
 
 /// An AX action name as the plain name agents see. Custom actions
 /// (`Name:Reply\nTarget:...`) keep their name part.
-/// A menu item's shortcut as press_key takes it, from AXMenuItemCmdChar and
-/// AXMenuItemCmdModifiers (0 is Command alone; bit 0 Shift, 1 Option, 2
-/// Control, 3 no Command). Empty for an item with no shortcut or a key with
-/// no name here.
-pub fn shortcut(cmd_char: &str, modifiers: i64) -> String {
-    let mut chars = cmd_char.chars();
-    let (Some(c), None) = (chars.next(), chars.next()) else { return String::new() };
-    let key = match c {
-        '\r' | '\u{3}' => "Return".to_string(),
-        '\t' => "Tab".to_string(),
-        ' ' => "Space".to_string(),
-        '\u{1b}' => "Escape".to_string(),
-        '\u{8}' | '\u{7f}' => "Backspace".to_string(),
-        '\u{F728}' => "Delete".to_string(),
-        '\u{F700}' => "Up".to_string(),
-        '\u{F701}' => "Down".to_string(),
-        '\u{F702}' => "Left".to_string(),
-        '\u{F703}' => "Right".to_string(),
-        '\u{F729}' => "Home".to_string(),
-        '\u{F72B}' => "End".to_string(),
-        '\u{F72C}' => "PageUp".to_string(),
-        '\u{F72D}' => "PageDown".to_string(),
-        '+' => "plus".to_string(),
-        c if ('\u{F704}'..='\u{F71B}').contains(&c) => format!("F{}", c as u32 - 0xF704 + 1),
-        c if c.is_ascii_graphic() => c.to_ascii_lowercase().to_string(),
-        _ => return String::new(),
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    if modifiers & 8 == 0 {
-        parts.push("cmd");
-    }
-    if modifiers & 4 != 0 {
-        parts.push("ctrl");
-    }
-    if modifiers & 2 != 0 {
-        parts.push("alt");
-    }
-    if modifiers & 1 != 0 {
-        parts.push("shift");
-    }
-    parts.push(&key);
-    parts.join("+")
-}
-
 pub fn action_name(ax: &str) -> String {
     if let Some(rest) = ax.strip_prefix("Name:") {
         let name = rest.split('\n').next().unwrap_or(rest);

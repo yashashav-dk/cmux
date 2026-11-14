@@ -467,7 +467,7 @@ impl Walk {
             focused: v[7].as_ref().and_then(Cf::as_bool).unwrap_or(false),
             disabled: v[8].as_ref().and_then(Cf::as_bool).is_some_and(|enabled| !enabled),
             identifier: text(&v[12]),
-            shortcut: roles::shortcut(
+            shortcut: crate::observe::outline::menu_shortcut(
                 &text(&v[13]),
                 v[14].as_ref().and_then(Cf::as_i64).unwrap_or(0),
             ),
