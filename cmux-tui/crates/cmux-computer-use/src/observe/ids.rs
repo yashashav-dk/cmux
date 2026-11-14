@@ -132,6 +132,13 @@ const RECYCLED_ROLES: &[&str] = &[
     "column",
 ];
 
+/// Two labels of a recycled row are the same item when they differ only in
+/// digits ("2 min ago", an unread count).
+fn same_item(a: &str, b: &str) -> bool {
+    let strip = |s: &str| s.chars().filter(|c| !c.is_ascii_digit()).collect::<String>();
+    a == b || strip(a) == strip(b)
+}
+
 /// Roles an unnamed element of which is told apart by the text inside it.
 const ITEM_ROLES: &[&str] = &[
     "row",
@@ -291,7 +298,7 @@ impl WindowIds {
                 v.iter().copied().find(|id| {
                     !taken.contains(id)
                         && (!RECYCLED_ROLES.contains(&e.role.as_str())
-                            || old.get(id).is_some_and(|o| o.label == f.label))
+                            || old.get(id).is_some_and(|o| same_item(&o.label, &f.label)))
                 })
             });
             if let Some(id) = found {
@@ -309,6 +316,17 @@ impl WindowIds {
             }
             let parent = f.parent.and_then(|p| ids[p]);
             let fits = |id: &u32| !taken.contains(id);
+            // By place alone (no label) only when the identities do not say
+            // it is another element: an unnamed field put where one was removed
+            // is new. An app that reads elements anew (SwiftUI) labels them.
+            let place_fits = |id: &u32| {
+                fits(id)
+                    && (!f.label.is_empty()
+                        || match (e.identity, old.get(id).and_then(|o| o.identity)) {
+                            (Some(a), Some(b)) => a == b,
+                            _ => true,
+                        })
+            };
             let found = (!e.identifier.is_empty())
                 .then(|| by_ident.get(&(parent, e.role.as_str(), e.identifier.as_str())))
                 .flatten()
@@ -317,7 +335,7 @@ impl WindowIds {
                     by_key
                         .get(&(parent, e.role.clone(), f.label.clone(), f.nth))
                         .copied()
-                        .filter(|id| fits(id))
+                        .filter(|id| place_fits(id))
                 });
             let id = found.unwrap_or_else(|| {
                 *next += 1;

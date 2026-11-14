@@ -469,3 +469,30 @@ fn menu_shortcuts_read_as_press_key_combos() {
     assert_eq!(s("\u{F700}", 0), "cmd+Up");
     assert_eq!(s("", 0), "");
 }
+
+#[test]
+fn an_unnamed_field_put_where_one_was_removed_is_new() {
+    let field = |id: &str, h: u64| ident(el(id, "text_field", ""), h);
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(with(el("1.0", "window", "W"), vec![field("1.1", 11)]));
+    w.assign(&mut a, false, &mut n);
+    let old = a.root.children[0].id.clone();
+    let mut b = tree(with(el("2.0", "window", "W"), vec![field("2.1", 99)]));
+    w.assign(&mut b, false, &mut n);
+    assert_ne!(b.root.children[0].id, old);
+}
+
+#[test]
+fn a_recycled_row_whose_time_ticks_keeps_its_id() {
+    let row = |id: &str, text: &str| {
+        ident(with(el(id, "row", ""), vec![el(&format!("{id}t"), "text", text)]), 7)
+    };
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(with(el("1.0", "window", "W"), vec![row("1.1", "Ada, 2 min ago")]));
+    w.assign(&mut a, false, &mut n);
+    let mut b = tree(with(el("2.0", "window", "W"), vec![row("2.1", "Ada, 3 min ago")]));
+    w.assign(&mut b, false, &mut n);
+    assert_eq!(a.root.children[0].id, b.root.children[0].id);
+}

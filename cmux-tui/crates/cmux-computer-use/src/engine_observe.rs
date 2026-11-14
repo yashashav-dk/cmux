@@ -16,6 +16,10 @@ pub(super) struct Observe {
     walking: Mutex<()>,
     /// (session, window) -> the outline the agent last saw of it.
     seen: Mutex<HashMap<(String, String), outline::Outline>>,
+    /// window -> the most elements a walk of it was asked for, when more than
+    /// the default: later default walks read as far, so ids past the default
+    /// limit stay current instead of being carried (and healed every action).
+    reach: Mutex<HashMap<String, usize>>,
 }
 
 /// An action's target after the guards: the desktop's element id, or the
@@ -50,6 +54,20 @@ impl Engine {
         options: TreeOptions,
     ) -> Result<UiTree, DesktopError> {
         let _walking = lock(&self.observe.walking);
+        let default = TreeOptions::default().max_nodes;
+        let options = {
+            let mut reach = lock(&self.observe.reach);
+            if options.max_nodes > default {
+                reach.insert(window_id.to_string(), options.max_nodes);
+                options
+            } else if options.max_nodes == default
+                && let Some(&wide) = reach.get(window_id)
+            {
+                TreeOptions { max_nodes: wide, ..options }
+            } else {
+                options
+            }
+        };
         let mut tree = self.desktop.ui_tree(window_id, options)?;
         lock(&self.observe.ids).assign(window_id, &mut tree, options.menus);
         Ok(tree)
@@ -464,12 +482,10 @@ impl Engine {
             }
             _ => {}
         }
-        // A fresh walk above gave the element a new desktop id.
-        if let Some(n) = small
-            && let Some(ids::Resolved::Current(e)) =
-                lock(&self.observe.ids).window(&window.id).map(|w| w.resolve(n))
-        {
-            out.element = Some(e.platform_id);
+        // A fresh walk above gave the element a new desktop id (and one that
+        // carried it walks again: never act on a replaced desktop id).
+        if let Some(n) = small {
+            out.element = Some(self.resolve_small(window, n)?);
         }
         Ok(out)
     }

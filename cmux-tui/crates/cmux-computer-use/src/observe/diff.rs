@@ -201,8 +201,9 @@ fn changed_line(new: &Line, old: &Line, opts: &Options) -> String {
             format!("actions: {}", old.actions.join(", "))
         });
     }
-    if old.tree_parent != new.tree_parent {
-        was.push(match old.tree_parent {
+    // Moves name the parents the outlines show.
+    if old.parent != new.parent {
+        was.push(match old.parent {
             Some(p) => format!("in [{p}]"),
             None => "at the top".into(),
         });
@@ -219,10 +220,7 @@ fn changed_line(new: &Line, old: &Line, opts: &Options) -> String {
             f.height.round()
         ));
     }
-    let moved = new
-        .tree_parent
-        .filter(|_| old.tree_parent != new.tree_parent)
-        .map(|p| format!(" (now in [{p}])"));
+    let moved = new.parent.filter(|_| old.parent != new.parent).map(|p| format!(" (now in [{p}])"));
     if !was.is_empty() {
         text.push_str(&format!("{} (was: {})", moved.unwrap_or_default(), was.join(", ")));
     }
