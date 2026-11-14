@@ -183,6 +183,20 @@ impl Engine {
         let windows = before.map(|b| self.window_changes(b)).unwrap_or_default();
         let look = Look::from_args(args);
         let root = state.remove("root").and_then(|r| serde_json::from_value::<Element>(r).ok());
+        if !look.json {
+            let truncated = state.get("truncated").and_then(Value::as_bool).unwrap_or(false);
+            for key in ["frames_in", "coordinates", "target", "captures"] {
+                state.remove(key);
+            }
+            if !truncated {
+                state.remove("truncated");
+            }
+            for key in ["redacted_windows", "left_out_apps"] {
+                if state.get(key) == Some(&json!(0)) {
+                    state.remove(key);
+                }
+            }
+        }
         match root {
             Some(root) => {
                 let truncated = state.get("truncated").and_then(Value::as_bool).unwrap_or(false);
@@ -190,19 +204,6 @@ impl Engine {
                 // Named before the action, else by the desktop id the state walk gave it.
                 let acted = acted.or_else(|| self.acted_id(args));
                 let shown_menu = menu_open && !open_menus(&root, acted.unwrap_or(0)).is_empty();
-                if !look.json {
-                    for key in ["frames_in", "coordinates", "target", "captures"] {
-                        state.remove(key);
-                    }
-                    if !truncated {
-                        state.remove("truncated");
-                    }
-                    for key in ["redacted_windows", "left_out_apps"] {
-                        if state.get(key) == Some(&json!(0)) {
-                            state.remove(key);
-                        }
-                    }
-                }
                 self.present(
                     &ctx.session,
                     window_id,

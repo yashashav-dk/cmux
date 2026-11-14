@@ -44,6 +44,8 @@ pub struct Line {
     pub depth: usize,
     /// The nearest shown ancestor.
     pub parent: Option<u32>,
+    /// The element's own parent in the tree (shown or folded).
+    pub tree_parent: Option<u32>,
     pub role: String,
     /// Its name (a static text's text).
     pub label: String,
@@ -69,6 +71,9 @@ pub struct Outline {
     pub truncated: bool,
     /// Elements in the tree, shown or folded.
     pub elements: usize,
+    /// The ids of every element of the tree outside the menu bar, shown or
+    /// folded: one folded in one look and shown in the next is no new element.
+    pub present: std::collections::HashSet<u32>,
 }
 
 /// Roles that are only layout when they have no name, value or action.
@@ -152,6 +157,11 @@ pub fn quote(text: &str) -> String {
             '\r' => {}
             '\t' => s.push(' '),
             c if c.is_control() => {}
+            // Direction marks and zero-width characters (Calculator's "\u{200e}0").
+            '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}' => {}
             c => s.push(c),
         }
     }
@@ -212,7 +222,7 @@ fn folds(e: &Element, parent_label: &str) -> bool {
 pub fn build(root: &Element, truncated: bool, opts: &Options) -> Outline {
     let mut out = Outline { truncated, ..Outline::default() };
     let mut focused: Option<(usize, usize)> = None; // (tree depth, line)
-    visit(root, 0, 0, None, "", false, opts, &mut out, &mut focused);
+    visit(root, 0, 0, None, None, "", false, opts, &mut out, &mut focused);
     out.focused = focused.map(|(_, line)| line);
     out
 }
@@ -223,6 +233,7 @@ fn visit(
     tree_depth: usize,
     depth: usize,
     parent: Option<u32>,
+    tree_parent: Option<u32>,
     parent_label: &str,
     in_menu_bar: bool,
     opts: &Options,
@@ -231,6 +242,10 @@ fn visit(
 ) {
     out.elements += 1;
     let menu_bar = in_menu_bar || e.role == super::ids::MENU_BAR;
+    let own_id = e.id.parse::<u32>().ok();
+    if !menu_bar && let Some(id) = own_id {
+        out.present.insert(id);
+    }
     // With the menus folded, the menu bar shows only its menus' titles.
     if in_menu_bar && !opts.menus && e.role != "menu_bar_item" {
         count(e, out);
@@ -257,6 +272,7 @@ fn visit(
             id,
             depth,
             parent,
+            tree_parent,
             role: e.role.clone(),
             label: label.clone(),
             value,
@@ -291,6 +307,7 @@ fn visit(
             tree_depth + 1,
             child_depth,
             child_parent,
+            own_id,
             &child_label,
             menu_bar,
             opts,
@@ -380,7 +397,7 @@ pub fn build_items(parent: &Element, opts: &Options) -> Outline {
     let mut focused = None;
     let id = parent.id.parse::<u32>().ok();
     for c in &parent.children {
-        visit(c, 1, 0, id, parent.name.trim(), true, &opts, &mut out, &mut focused);
+        visit(c, 1, 0, id, id, parent.name.trim(), true, &opts, &mut out, &mut focused);
     }
     out
 }

@@ -29,13 +29,21 @@ pub struct Changes {
     pub changed: Vec<(usize, usize)>,
     /// Lines of the old outline whose element is gone.
     pub removed: Vec<usize>,
+    /// Lines of the new outline whose element the last look folded away.
+    pub unfolded: Vec<usize>,
+    /// Lines of the old outline whose element is still there, folded now.
+    pub folded: Vec<usize>,
     /// The focus moved (new focused id, old one).
     pub focus: Option<(Option<u32>, Option<u32>)>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.changed.is_empty() && self.removed.is_empty()
+        self.added.is_empty()
+            && self.changed.is_empty()
+            && self.removed.is_empty()
+            && self.unfolded.is_empty()
+            && self.folded.is_empty()
     }
 }
 
@@ -54,7 +62,7 @@ fn same(a: &Line, b: &Line, opts: &Options) -> bool {
         && a.checked == b.checked
         && a.selected == b.selected
         && a.actions == b.actions
-        && a.parent == b.parent
+        && a.tree_parent == b.tree_parent
         && (!opts.frames || a.frame == b.frame)
 }
 
@@ -65,13 +73,20 @@ pub fn compute(old: &outline::Outline, new: &outline::Outline, opts: &Options) -
     let mut c = Changes::default();
     for (i, l) in new.lines.iter().enumerate().filter(|(_, l)| compared(l)) {
         match old_at.get(&l.id) {
+            // Folded in the last look (a bare group that now has focus): shown.
+            None if old.present.contains(&l.id) => c.unfolded.push(i),
             None => c.added.push(i),
             Some(&j) if !same(&old.lines[j], l, opts) => c.changed.push((i, j)),
             Some(_) => {}
         }
     }
     for (j, l) in old.lines.iter().enumerate().filter(|(_, l)| compared(l)) {
-        if !new_ids.contains(&l.id) {
+        if new_ids.contains(&l.id) {
+            continue;
+        }
+        if new.present.contains(&l.id) {
+            c.folded.push(j);
+        } else {
             c.removed.push(j);
         }
     }
@@ -96,24 +111,42 @@ pub fn around_change(old: &str, new: &str) -> (String, String) {
     while q < a.len() - p && q < b.len() - p && a[a.len() - 1 - q] == b[b.len() - 1 - q] {
         q += 1;
     }
-    let cut = |v: &[char]| -> String {
+    // Where each value's changed part ends.
+    let (mut end_a, mut end_b) = (a.len() - q, b.len() - q);
+    // Two long values the platform cut at its limit end differently: find the
+    // text after the change again (the old in the new: an insertion; the new
+    // in the old: a deletion), so the change is what was typed or removed.
+    let find = |from: &[char], to: &[char]| -> Option<usize> {
+        let probe: Vec<char> = from[p..].iter().take(24).copied().collect();
+        if probe.len() < 8 || to.len() < probe.len() {
+            return None;
+        }
+        (p..=to.len() - probe.len()).take(4000).find(|&i| to[i..i + probe.len()] == probe[..])
+    };
+    if end_a - p > CHANGE_MAX || end_b - p > CHANGE_MAX {
+        if let Some(i) = find(&a, &b) {
+            (end_a, end_b) = (p, i);
+        } else if let Some(i) = find(&b, &a) {
+            (end_a, end_b) = (i, p);
+        }
+    }
+    let cut = |v: &[char], end: usize| -> String {
         let start = p.saturating_sub(CONTEXT);
-        let mid_end = v.len() - q;
-        let end = (mid_end + CONTEXT).min(v.len());
+        let tail = (end + CONTEXT).min(v.len());
         let mut s = String::new();
         if start > 0 {
             s.push('\u{2026}');
         }
         s.extend(&v[start..p]);
-        let mid: String = v[p..mid_end].iter().collect();
+        let mid: String = v[p..end].iter().collect();
         s.push_str(&clip(&mid, CHANGE_MAX));
-        s.extend(&v[mid_end..end]);
-        if end < v.len() {
+        s.extend(&v[end..tail]);
+        if tail < v.len() {
             s.push('\u{2026}');
         }
         s
     };
-    (cut(&a), cut(&b))
+    (cut(&a, end_a), cut(&b, end_b))
 }
 
 /// A changed line: its new text, the value cut around the change when long,
@@ -168,8 +201,8 @@ fn changed_line(new: &Line, old: &Line, opts: &Options) -> String {
             format!("actions: {}", old.actions.join(", "))
         });
     }
-    if old.parent != new.parent {
-        was.push(match old.parent {
+    if old.tree_parent != new.tree_parent {
+        was.push(match old.tree_parent {
             Some(p) => format!("in [{p}]"),
             None => "at the top".into(),
         });
@@ -186,7 +219,10 @@ fn changed_line(new: &Line, old: &Line, opts: &Options) -> String {
             f.height.round()
         ));
     }
-    let moved = new.parent.filter(|_| old.parent != new.parent).map(|p| format!(" (now in [{p}])"));
+    let moved = new
+        .tree_parent
+        .filter(|_| old.tree_parent != new.tree_parent)
+        .map(|p| format!(" (now in [{p}])"));
     if !was.is_empty() {
         text.push_str(&format!("{} (was: {})", moved.unwrap_or_default(), was.join(", ")));
     }
@@ -236,6 +272,29 @@ pub fn render(
     }
     for &(i, j) in &c.changed {
         out.push(changed_line(&new.lines[i], &old.lines[j], opts));
+    }
+    // A container shown or folded only because its own state changed.
+    for &i in &c.unfolded {
+        let l = &new.lines[i];
+        let was = if l.focused {
+            "not focused"
+        } else if l.selected {
+            "not selected"
+        } else {
+            "a plain container"
+        };
+        out.push(format!("~ [{}] {} (was: {was})", l.id, line_text(l, opts)));
+    }
+    for &j in &c.folded {
+        let l = &old.lines[j];
+        let was = if l.focused {
+            "focused"
+        } else if l.selected {
+            "selected"
+        } else {
+            "named"
+        };
+        out.push(format!("~ [{}] {} (was: {was})", l.id, outline::short(l)));
     }
     if !c.removed.is_empty() {
         let removed_ids: HashSet<u32> = c.removed.iter().map(|&j| old.lines[j].id).collect();

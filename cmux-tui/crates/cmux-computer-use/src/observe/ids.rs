@@ -300,20 +300,15 @@ impl WindowIds {
             }
         }
         // Pass 2: the identifier, then parent, role, label and position, over
-        // the ids pass 1 left free and never onto an element whose identity
-        // is known and differs; parents come before their children.
+        // the ids pass 1 left free (an element still there by its identity
+        // keeps its id); parents come before their children. Apps that make
+        // new elements for every read (SwiftUI) match here.
         for (i, (f, e)) in flat.iter().enumerate() {
             if ids[i].is_some() {
                 continue;
             }
             let parent = f.parent.and_then(|p| ids[p]);
-            let fits = |id: &u32| {
-                !taken.contains(id)
-                    && match (e.identity, old.get(id).and_then(|o| o.identity)) {
-                        (Some(a), Some(b)) => a == b,
-                        _ => true,
-                    }
-            };
+            let fits = |id: &u32| !taken.contains(id);
             let found = (!e.identifier.is_empty())
                 .then(|| by_ident.get(&(parent, e.role.as_str(), e.identifier.as_str())))
                 .flatten()

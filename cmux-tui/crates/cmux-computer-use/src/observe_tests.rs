@@ -408,3 +408,51 @@ fn a_selection_change_is_a_change() {
     let text = diff::render(&a, &b, &diff::compute(&a, &b, &opts), &opts).unwrap();
     assert_eq!(text, "~ [30] row \"Inbox\" selected (was: not selected)");
 }
+
+#[test]
+fn elements_read_anew_each_walk_keep_their_ids_by_place_and_label() {
+    // SwiftUI gives every read new element references: identities never repeat.
+    let side = |g: u32| {
+        with(
+            el(&format!("{g}.0"), "window", "Settings"),
+            vec![ident(el(&format!("{g}.1"), "text", "Sound"), u64::from(g) * 100 + 1)],
+        )
+    };
+    let mut w = WindowIds::default();
+    let mut n = 0u32;
+    let mut a = tree(side(1));
+    w.assign(&mut a, false, &mut n);
+    let mut b = tree(side(2));
+    w.assign(&mut b, false, &mut n);
+    assert_eq!(a.root.children[0].id, b.root.children[0].id);
+}
+
+#[test]
+fn a_container_folded_or_shown_only_by_its_focus_is_no_add_or_remove() {
+    let mut group = with(el("13", "group", ""), vec![el("14", "button", "7")]);
+    group.focused = true;
+    let before = with(el("10", "window", "Calculator"), vec![group.clone()]);
+    group.focused = false;
+    let after = with(el("10", "window", "Calculator"), vec![group]);
+    let opts = Options::default();
+    let (a, b) = (outline::build(&before, false, &opts), outline::build(&after, false, &opts));
+    let text = diff::render(&a, &b, &diff::compute(&a, &b, &opts), &opts).unwrap();
+    assert_eq!(text, "~ [13] group (was: focused)\nFocus now: no element of this window");
+}
+
+#[test]
+fn an_insertion_into_a_value_cut_at_the_limit_shows_what_was_typed() {
+    let doc: String = (1..60).map(|i| format!("line {i} the quick brown fox\n")).collect();
+    let cap = |s: String| -> String { s.chars().take(2000).collect() };
+    let old = cap(format!("OBS{doc}"));
+    let new = cap(format!("OBSHELLO{doc}"));
+    let (o, n) = diff::around_change(&old, &new);
+    assert!(n.starts_with("OBSHELLOline 1 the quick"), "{n}");
+    assert!(o.starts_with("OBSline 1 the quick"), "{o}");
+    assert!(n.chars().count() < 60, "{n}");
+}
+
+#[test]
+fn quotes_drop_direction_marks() {
+    assert_eq!(outline::quote("\u{200e}7"), "\"7\"");
+}
