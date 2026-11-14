@@ -272,6 +272,12 @@ pub fn render(
                 tops[REMOVED_NAMED..].iter().map(|&j| old.lines[j].id).collect();
             out.push(format!("- also removed: {}", ranges(&mut rest)));
         }
+        if new.truncated {
+            out.push(
+                "(This look was cut at the element limit, so some of what shows as removed may only be past it; get_ui_tree with a larger max_nodes tells.)"
+                    .into(),
+            );
+        }
     }
     if let Some((now, _)) = c.focus {
         let line = now.and_then(|id| new.lines.iter().find(|l| l.id == id));
