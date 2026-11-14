@@ -1324,12 +1324,28 @@ fn from_content(content: &Value, images: &mut Vec<Value>, failed: bool) -> Value
     if failed {
         return json!({"content": blocks, "error": {"message": message}});
     }
+    // A JSON body, then a Computer Use outline as plain text (the tree a look
+    // returns) and images: the outline back under `tree`, the images in `images`.
     if let Some(mut body) = json_body
         && blocks.len() > 1
-        && blocks.iter().skip(1).all(|block| block["type"] == "image")
+        && blocks.iter().skip(1).all(|block| block["type"] == "image" || block["type"] == "text")
         && body.get("images").is_none()
+        && body.get("tree").is_none()
     {
-        body.set("images", Value::Array(blocks.into_iter().skip(1).collect()));
+        let texts: Vec<&str> = blocks
+            .iter()
+            .skip(1)
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        if !texts.is_empty() {
+            body.set("tree", json!(texts.join("\n")));
+        }
+        let images: Vec<Value> =
+            blocks.into_iter().skip(1).filter(|block| block["type"] == "image").collect();
+        if !images.is_empty() {
+            body.set("images", Value::Array(images));
+        }
         return body;
     }
     json!({"content": blocks})

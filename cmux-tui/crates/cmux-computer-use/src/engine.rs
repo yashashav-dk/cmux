@@ -89,9 +89,25 @@ impl ToolOutput {
         Self::error(e.code(), e.to_string())
     }
 
-    /// The MCP `tools/call` result.
+    /// The MCP `tools/call` result. An outline (`tree`, or the state's
+    /// `tree`) goes as its own text block after the JSON, as plain lines:
+    /// quoted inside JSON every line break and quote would be escaped.
     pub fn to_mcp(&self) -> Value {
-        let mut content = vec![json!({"type": "text", "text": self.body.to_string()})];
+        let mut body = self.body.clone();
+        let mut texts: Vec<String> = Vec::new();
+        let mut take = |o: Option<&mut serde_json::Map<String, Value>>| {
+            if let Some(o) = o
+                && let Some(Value::String(t)) = o.remove("tree")
+            {
+                texts.push(t);
+            }
+        };
+        take(body.as_object_mut());
+        take(body.get_mut("state").and_then(Value::as_object_mut));
+        let mut content = vec![json!({"type": "text", "text": body.to_string()})];
+        for t in texts {
+            content.push(json!({"type": "text", "text": t}));
+        }
         if let Some(png) = &self.png_base64 {
             content.push(json!({"type": "image", "data": png, "mimeType": "image/png"}));
         }
@@ -320,6 +336,8 @@ pub struct Engine {
     /// session -> the app its foreground call brought to the front (see
     /// engine_focus: AgentFront).
     agent_front: Mutex<HashMap<String, focus::AgentFront>>,
+    /// Element ids, the agents' last looks and the guards ([`crate::observe`]).
+    observe: observe_glue::Observe,
     audit: Option<PathBuf>,
     machine_name: String,
     settle: Settle,
@@ -392,6 +410,7 @@ impl Engine {
             seen: Mutex::new(HashMap::new()),
             last_display: Mutex::new(HashMap::new()),
             agent_front: Mutex::new(HashMap::new()),
+            observe: observe_glue::Observe::default(),
             audit,
             machine_name: parts.machine_name,
             settle: parts.settle,
@@ -427,6 +446,7 @@ impl Engine {
         lock(&self.seen).retain(|(s, _), _| s != session);
         lock(&self.last_display).remove(session);
         lock(&self.agent_front).remove(session);
+        self.forget_session_seen(session);
     }
 
     pub fn call(&self, ctx: &CallContext, name: &str, args: &Value) -> ToolOutput {
@@ -460,6 +480,7 @@ impl Engine {
                         && let Some(id) = args.get("window_id").and_then(Value::as_str)
                     {
                         lock(&self.seen).remove(&(ctx.session.clone(), format!("w:{id}")));
+                        self.forget_seen(&ctx.session, id);
                     }
                     if let Some(out) = serde_json::from_str::<Value>(&done)
                         .ok()
@@ -480,6 +501,12 @@ impl Engine {
             self.sessions.begin(&ctx.session, call_id);
         }
         let args = if args.is_object() { args.clone() } else { json!({}) };
+        // The app's windows before an observing action, to report the ones
+        // it opens or closes (sheets, dialogs, new documents).
+        let app_windows_before = (tools::OBSERVES.contains(&name)
+            && args.get("observe").and_then(Value::as_bool) != Some(false))
+        .then(|| args_str(&args, "window_id").and_then(|id| self.app_windows(id)))
+        .flatten();
         let raising = self.foreground_begin(tool, &args);
         let mut guard = self.focus_begin(&ctx.session, tool, &args);
         let (mut out, app) = match self.dispatch(tool, ctx, &args) {
@@ -508,11 +535,17 @@ impl Engine {
             && tools::OBSERVES.contains(&name)
             && name != "batch"
             && args.get("observe").and_then(Value::as_bool) != Some(false)
+            && out.body.pointer("/menu/state") != Some(&json!(observe_glue::MENU_BAR_LISTING))
             && let Some(window_id) = args_str(&args, "window_id")
             && let Some(app) = &app
         {
             let mode = self.settle_mode(&args);
             self.attach_state(ctx, window_id, app, &mut out, mode, name == "type_text");
+        }
+        // The state as the model reads it: the outline of what changed, and
+        // the app's windows that opened or closed (a batch's and a wait's too).
+        if !out.is_error && out.body.get("state").is_some() {
+            self.present_state(ctx, &args, &mut out, app_windows_before.as_ref());
         }
         if let Some(g) = &guard {
             focus = Some(self.focus_after_settle(g, focus));
@@ -680,20 +713,26 @@ impl Engine {
                     .map(|n| n.clamp(1, 5000) as usize)
                     .unwrap_or(TreeOptions::default().max_nodes);
                 let mut tree = self
-                    .desktop
-                    .ui_tree(&window.id, TreeOptions { max_nodes, ..TreeOptions::default() })
+                    .walk_tree(&window.id, TreeOptions { max_nodes, ..TreeOptions::default() })
                     .map_err(|e| ToolOutput::desktop(&e))?;
                 let geometry = self.geometry_for(ctx, &window);
                 rewrite_frames(&mut tree.root, &geometry);
-                Ok((
-                    ToolOutput::ok(json!({
-                        "window_id": tree.window_id,
-                        "truncated": tree.truncated,
-                        "frames_in": "screenshot pixels",
-                        "root": tree.root,
-                    })),
-                    Some(app),
-                ))
+                let mut body = serde_json::Map::new();
+                body.insert("window_id".into(), json!(tree.window_id));
+                if tree.truncated {
+                    body.insert("truncated".into(), json!(true));
+                }
+                self.present(
+                    &ctx.session,
+                    &window.id,
+                    &tree.root,
+                    tree.truncated,
+                    crate::observe::Look::from_args(args),
+                    &mut body,
+                    Vec::new(),
+                    None,
+                );
+                Ok((ToolOutput::ok(Value::Object(body)), Some(app)))
             }
             "click" => self.click(&config, ctx, args),
             "type_text" => {
@@ -704,13 +743,14 @@ impl Engine {
                     .ok_or_else(|| ToolOutput::error("invalid_arguments", "text is required"))?;
                 let delivery = parse_delivery(args)?;
                 let app = self.act_on(&config, ctx, &window, delivery, false)?;
+                let guarded = self.guard(ctx, "type_text", &window, args, None)?;
                 self.cursor.show(CursorEvent::Typing {
                     session: ctx.session.clone(),
                     label: ctx.label.clone(),
                     at: None,
                     text: caption(text),
                 });
-                let element = args_str(args, "element_id");
+                let element = guarded.element.as_deref();
                 let out = if self.settle_mode(args) == SettleMode::Anthropic {
                     self.type_paced(&ctx.session, &window.id, element, text, delivery)?
                 } else {
@@ -741,7 +781,11 @@ impl Engine {
             "scroll" => {
                 let window = self.window(need(args, "window_id")?)?;
                 let app = self.act_on(&config, ctx, &window, Delivery::Background, true)?;
-                let target = self.pointer_target(ctx, &window, args)?;
+                let guarded = self.guard(ctx, "scroll", &window, args, None)?;
+                let target = match guarded.element {
+                    Some(element_id) => PointerTarget::Element { window_id: window.id, element_id },
+                    None => self.pointer_target(ctx, &window, args)?,
+                };
                 let dx = args_f64(args, "dx").unwrap_or(0.0).clamp(-200.0, 200.0);
                 let dy = args_f64(args, "dy").unwrap_or(0.0).clamp(-200.0, 200.0);
                 if let PointerTarget::Point { point, .. } = &target {
@@ -787,19 +831,28 @@ impl Engine {
             "set_value" => {
                 let window = self.window(need(args, "window_id")?)?;
                 let app = self.act_on(&config, ctx, &window, Delivery::Background, false)?;
+                need(args, "element_id")?;
+                let guarded = self.guard(ctx, "set_value", &window, args, None)?;
+                let element = guarded.element.unwrap_or_default();
                 let value = args.get("value").and_then(Value::as_str).unwrap_or_default();
                 let out = self
                     .desktop
-                    .set_value(&window.id, need(args, "element_id")?, value)
+                    .set_value(&window.id, &element, value)
                     .map_err(|e| ToolOutput::desktop(&e))?;
                 Ok((self.outcome(ctx, out), Some(app)))
             }
             "perform_action" => {
                 let window = self.window(need(args, "window_id")?)?;
                 let app = self.act_on(&config, ctx, &window, Delivery::Background, false)?;
+                need(args, "element_id")?;
+                let guarded = self.guard(ctx, "perform_action", &window, args, None)?;
+                if let Some(done) = guarded.done {
+                    return Ok((done, Some(app)));
+                }
+                let element = guarded.element.unwrap_or_default();
                 let out = self
                     .desktop
-                    .perform_action(&window.id, need(args, "element_id")?, need(args, "action")?)
+                    .perform_action(&window.id, &element, need(args, "action")?)
                     .map_err(|e| ToolOutput::desktop(&e))?;
                 Ok((self.outcome(ctx, out), Some(app)))
             }
@@ -1154,6 +1207,22 @@ impl Engine {
             ));
         }
         let app = self.act_on(config, ctx, &window, delivery, true)?;
+        let point = match &target {
+            PointerTarget::Point { point, .. } if args_str(args, "window_id").is_some() => {
+                Some(*point)
+            }
+            _ => None,
+        };
+        let guarded = self.guard(ctx, "click", &window, args, point)?;
+        if let Some(done) = guarded.done {
+            return Ok((done, Some(app)));
+        }
+        let target = match (guarded.element, target) {
+            (Some(element_id), PointerTarget::Element { window_id, .. }) => {
+                PointerTarget::Element { window_id, element_id }
+            }
+            (_, target) => target,
+        };
         if let PointerTarget::Point { point, .. } = &target {
             self.glide(ctx, *point);
         }
@@ -1489,9 +1558,8 @@ impl Engine {
         state["captures"] = json!(captures);
         let config = self.config();
         if self.still_allowed(&config, ctx, window_id, app).is_ok()
-            && let Ok(mut tree) = self
-                .desktop
-                .ui_tree(window_id, TreeOptions { menus: false, ..TreeOptions::default() })
+            && let Ok(mut tree) =
+                self.walk_tree(window_id, TreeOptions { menus: false, ..TreeOptions::default() })
         {
             // The capture just recorded this window's geometry for the session.
             let seen = lock(&self.seen)
@@ -1797,6 +1865,9 @@ mod focus;
 #[path = "engine_menus.rs"]
 mod menus_glue;
 
+#[path = "engine_observe.rs"]
+mod observe_glue;
+
 #[cfg(test)]
 #[path = "engine_tests.rs"]
 mod tests;
@@ -1808,3 +1879,7 @@ mod focus_tests;
 #[cfg(test)]
 #[path = "engine_menus_tests.rs"]
 mod menus_tests;
+
+#[cfg(test)]
+#[path = "engine_observe_tests.rs"]
+mod observe_tests;
