@@ -80,7 +80,8 @@ check_built_app() {
 
 refuse_if_staged_running() {
   local pids
-  pids=$(pgrep -f "$STAGED_APP/Contents/MacOS/cmux" || true)
+  # -a: macOS pgrep otherwise skips our ancestors (e.g. run from a terminal in that app).
+  pids=$(pgrep -a -f "$STAGED_APP/Contents/MacOS/cmux" || true)
   if [ -n "$pids" ]; then
     echo "error: the staged app is running (pid $pids); quit it before restaging" >&2
     return 1

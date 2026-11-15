@@ -36,7 +36,8 @@ if [ "$actual_id" != "$BUNDLE_ID" ]; then
   exit 1
 fi
 
-running=$(pgrep -f "$EXECUTABLE" || true)
+# -a: macOS pgrep otherwise skips our ancestors (e.g. run from a terminal in that app).
+running=$(pgrep -a -f "$EXECUTABLE" || true)
 if [ -n "$running" ]; then
   echo "already running: pid $running"
   exit 0
@@ -86,7 +87,7 @@ launchctl bootstrap "$DOMAIN" "$PLIST"
 
 pid=""
 for _ in $(seq 1 40); do
-  pid=$(pgrep -f "$EXECUTABLE" || true)
+  pid=$(pgrep -a -f "$EXECUTABLE" || true)
   [ -n "$pid" ] && break
   sleep 0.5
 done
