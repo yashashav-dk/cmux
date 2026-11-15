@@ -54,7 +54,9 @@ fork_preflight() {
   local dd_root="$HOME/Library/Developer/Xcode/DerivedData"
   local others=()
 
-  xcode=$(xcodebuild -version 2>/dev/null | head -n 1) || xcode=""
+  # No `| head`: under pipefail its early exit SIGPIPEs xcodebuild and fails the check.
+  xcode=$(xcodebuild -version 2>/dev/null) || xcode=""
+  xcode=${xcode%%$'\n'*}
   case "$xcode" in
     "Xcode 26."*) echo "preflight: $xcode" ;;
     *) echo "preflight: need Xcode 26.x, found '${xcode:-none}'" >&2; result=1 ;;
@@ -134,6 +136,12 @@ fork_xcodebuild_args() {
     printf '%s\n' "CMUX_SIDEBAR_EXTENSION_POINT_ID=$bundle_id.cmux.sidebar"
   fi
   printf '%s\n' "CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use"
+  # Xcode 26.3 (Swift 6.2.4) crashes in Release with default cross-module
+  # optimization: CmuxTerminalCore's @_silgen_name ghostty_surface_clear_selection
+  # and GhosttyKit's header declaration of it fail SIL deserialization in the
+  # app module. Upstream CI builds with Xcode 26.6; re-check after upgrading.
+  # shellcheck disable=SC2016 # $(inherited) is an Xcode build-setting reference
+  printf '%s\n' 'OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo'
 }
 
 # fork_require_sign_identity <identity>: fail unless the certificate exists in

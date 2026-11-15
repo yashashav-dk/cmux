@@ -33,16 +33,23 @@ DEVELOPMENT_TEAM=
 CODE_SIGN_ENTITLEMENTS=
 PROVISIONING_PROFILE_SPECIFIER="
 
+# Fork addition: Xcode 26.3's swift-frontend crashes in Release (default CMO)
+# on the duplicate ghostty_surface_clear_selection declaration.
+# shellcheck disable=SC2016 # $(inherited) is an Xcode build-setting reference
+no_cmo='OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo'
+
 expected_tagged="$common
 PRODUCT_BUNDLE_IDENTIFIER=com.cmuxterm.app.debug.fork-spike
 $signing
 CMUX_SIDEBAR_EXTENSION_POINT_ID=com.cmuxterm.app.debug.fork-spike.cmux.sidebar
-CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use"
+CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use
+$no_cmo"
 
 expected_untagged="$common
 PRODUCT_BUNDLE_IDENTIFIER=com.cmuxterm.app
 $signing
-CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use"
+CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use
+$no_cmo"
 
 tagged="$(fork_xcodebuild_args com.cmuxterm.app.debug.fork-spike spike 2>&1)"
 expect_list "tagged args" "$expected_tagged" "$tagged"

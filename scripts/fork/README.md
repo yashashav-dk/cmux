@@ -24,6 +24,9 @@ fork-only helper scripts; nothing here is part of the app.
   `cmux-fork-local` + `cmux.fork.entitlements`, verify, stage. Untagged: bundle id `com.cmuxterm.app`,
   staged at `~/Applications/cmux-fork-staging/cmux.app`, never launched by tooling. `--tag <t>`: bundle id
   `com.cmuxterm.app.debug.fork-<t>`, staged at `~/Applications/cmux-fork-staging/<t>/cmux.app`.
+  The build passes `OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo`: with Xcode 26.3 the Release build's default
+  cross-module optimization crashes swift-frontend (SIL deserialization of `ghostty_surface_clear_selection`,
+  declared both in GhosttyKit's header and with `@_silgen_name` in CmuxTerminalCore). Upstream builds with Xcode 26.6.
 - `bash scripts/fork/launch-tagged.sh <t>`: launches a staged tagged build by path through a one-shot
   launchd job running `env -i` with the tag's own `CMUX_TAG`, socket paths and auth scheme. It refuses any
   bundle whose id is not `com.cmuxterm.app.debug.fork-<t>`. Quit the app from its own menu, then run the
@@ -60,4 +63,5 @@ Because the NetworkExtension entitlement is gone, `fork_resign` deletes
 `scripts/sign-cmux-bundle.sh` does for any signing run without that entitlement. The Cloud tunnel is
 therefore unavailable in fork builds.
 
-Keys dropped because they stopped a self-signed build from launching: none so far.
+Keys dropped because they stopped a self-signed build from launching: none. The tagged spike build
+(`build.sh --tag spike`, 2026-11-14, Xcode 26.3) launched with all ten kept keys and no `amfid`/`taskgated` rejection.
