@@ -74,11 +74,25 @@ security import "$work/identity.p12" -k "$KEYCHAIN" -P "$P12_PASS" \
 unset P12_PASS
 
 # Let codesign use the key without a prompt. -l limits the change to this key.
-read -r -s -p "Login keychain password (lets codesign use the new key): " KEYCHAIN_PASSWORD
-echo
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s -l "$NAME" \
-  -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+# The certificate is already imported, so a re-run would skip this step: retry here.
+partition_set=0
+for attempt in 1 2 3; do
+  read -r -s -p "Login keychain password (lets codesign use the new key): " KEYCHAIN_PASSWORD
+  echo
+  if security set-key-partition-list -S apple-tool:,apple:,codesign: -s -l "$NAME" \
+       -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null; then
+    partition_set=1
+    break
+  fi
+  echo "That did not work (attempt $attempt of 3)." >&2
+done
 unset KEYCHAIN_PASSWORD
+if [ "$partition_set" -ne 1 ]; then
+  echo "error: $NAME was created, but codesign is not yet allowed to use its key. Run:" >&2
+  echo "  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -l $NAME -k '<login password>' $KEYCHAIN" >&2
+  print_trust_step
+  exit 1
+fi
 
 echo "Created $NAME in the login keychain."
 print_trust_step
