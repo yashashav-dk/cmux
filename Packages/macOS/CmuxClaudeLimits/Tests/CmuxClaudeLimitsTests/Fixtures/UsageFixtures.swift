@@ -72,4 +72,7 @@ enum UsageFixtures {
     """
 
     static let emptyLimits = #"{"five_hour": null, "seven_day": null, "limits": []}"#
+
+    /// HTTP 401 body for an expired OAuth access token.
+    static let expiredToken = #"{"type":"error","error":{"type":"authentication_error","message":"OAuth access token has expired. Re-authenticate to continue."}}"#
 }
