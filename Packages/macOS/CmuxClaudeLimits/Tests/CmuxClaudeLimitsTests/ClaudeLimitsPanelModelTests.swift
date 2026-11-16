@@ -179,7 +179,7 @@ struct ClaudeLimitsPanelModelTests {
     @Test func refreshAgeText() {
         let model = makeModel()
         #expect(model.refreshAgeText == nil)
-        model.lastSuccessfulRefresh = fixedNow.addingTimeInterval(-120)
+        model._setLastSuccessfulRefreshForTesting(fixedNow.addingTimeInterval(-120))
         #expect(model.refreshAgeText == "2m")
     }
 
@@ -207,5 +207,15 @@ struct ClaudeLimitsPanelModelTests {
         #expect(model.cards[2].rows[0].percent == 100)
         #expect(model.cards[2].rows[1].percent == 0)
     }
-}
 
+    @Test func refreshAgeNeverMovesBackward() throws {
+        let model = makeModel()
+        let newer = try teamActive()
+        model.apply(states: [orgID: .ok(newer)])
+        let first = model.lastSuccessfulRefresh
+        var older = newer
+        older.fetchedAt = fixedNow.addingTimeInterval(-900)
+        model.apply(states: [orgID: .ok(older)])
+        #expect(model.lastSuccessfulRefresh == first)
+    }
+}

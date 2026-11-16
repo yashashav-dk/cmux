@@ -8,7 +8,7 @@ public final class ClaudeLimitsPanelModel {
     public static let collapsedDefaultsKey = "claudeLimits.panelCollapsed"
 
     public private(set) var cards: [AccountCard] = []
-    public var lastSuccessfulRefresh: Date?
+    public private(set) var lastSuccessfulRefresh: Date?
     public private(set) var configuration: ClaudeLimitsConfiguration
 
     public var isCollapsed: Bool {
@@ -58,6 +58,11 @@ public final class ClaudeLimitsPanelModel {
     public var refreshAgeText: String? {
         guard let last = lastSuccessfulRefresh else { return nil }
         return Self.shortDuration(max(0, now().timeIntervalSince(last)))
+    }
+
+    /// Test hook: the public API only ever advances `lastSuccessfulRefresh`.
+    func _setLastSuccessfulRefreshForTesting(_ date: Date?) {
+        lastSuccessfulRefresh = date
     }
 
     public func apply(states: [String: AccountCardState]) {
