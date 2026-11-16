@@ -7,7 +7,7 @@ public struct ClaudeLimitsAccount: Sendable, Equatable, Codable, Identifiable {
     public init(
         label: String,
         configDir: String? = nil,
-        style: AccountLabelStyle = .badge,
+        style: AccountLabelStyle = .solo,
         color: String? = nil
     ) {
         self.label = label
