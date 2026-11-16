@@ -35,4 +35,31 @@ struct RefreshResultGuardTests {
     @Test func garbageIsUnparseable() {
         #expect(verdict("node: command not found") == .unparseable)
     }
+
+    @Test func unbalancedBraceInPrefixStillClean() {
+        let text = "hook { oops\n{\"is_error\":false,\"num_turns\":0,\"total_cost_usd\":0}"
+        #expect(verdict(text) == .clean)
+    }
+
+    @Test func unbalancedBraceInPrefixStillTrips() {
+        let text = "hook { oops\n{\"is_error\":false,\"num_turns\":2,\"total_cost_usd\":0}"
+        #expect(verdict(text) == .tripped("num_turns=2"))
+    }
+
+    @Test func lastResultObjectWins() {
+        let text = "{\"num_turns\":0,\"total_cost_usd\":0}\n{\"num_turns\":1,\"total_cost_usd\":0}"
+        #expect(verdict(text) == .tripped("num_turns=1"))
+    }
+
+    @Test func trailingHookObjectIsIgnored() {
+        let clean = "{\"num_turns\":0,\"total_cost_usd\":0}\n{\"hook\":\"done\"}"
+        let dirty = "{\"num_turns\":3,\"total_cost_usd\":0}\n{\"hook\":\"done\"}"
+        #expect(verdict(clean) == .clean)
+        #expect(verdict(dirty) == .tripped("num_turns=3"))
+    }
+
+    @Test func objectWithoutNumTurnsIsUnparseable() {
+        #expect(verdict("{}") == .unparseable)
+        #expect(verdict(#"{"hook":"done"}"#) == .unparseable)
+    }
 }

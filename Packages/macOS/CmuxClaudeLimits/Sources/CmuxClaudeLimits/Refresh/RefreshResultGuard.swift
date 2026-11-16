@@ -16,32 +16,39 @@ public struct RefreshResultGuard: Sendable {
         return .clean
     }
 
+    /// The result object is the last JSON object in stdout that parses and has `num_turns`.
+    /// Each `{` is tried as a start (from the end), so junk anywhere cannot hide it.
     private static func lastTopLevelObject(in data: Data) -> [String: Any]? {
         let bytes = [UInt8](data)
-        var ranges: [Range<Int>] = []
+        for start in bytes.indices.reversed() where bytes[start] == 0x7B {
+            guard let end = balancedEnd(in: bytes, from: start) else { continue }
+            let slice = Data(bytes[start...end])
+            if let object = (try? JSONSerialization.jsonObject(with: slice)) as? [String: Any],
+               object["num_turns"] != nil {
+                return object
+            }
+        }
+        return nil
+    }
+
+    private static func balancedEnd(in bytes: [UInt8], from start: Int) -> Int? {
         var depth = 0
-        var start = 0
         var inString = false
         var escaped = false
-        for (i, byte) in bytes.enumerated() {
+        for i in start..<bytes.count {
+            let byte = bytes[i]
             if inString {
                 if escaped { escaped = false } else if byte == 0x5C { escaped = true } else if byte == 0x22 { inString = false }
                 continue
             }
             switch byte {
-            case 0x22 where depth > 0: inString = true
-            case 0x7B:
-                if depth == 0 { start = i }
-                depth += 1
-            case 0x7D where depth > 0:
+            case 0x22: inString = true
+            case 0x7B: depth += 1
+            case 0x7D:
                 depth -= 1
-                if depth == 0 { ranges.append(start..<(i + 1)) }
+                if depth == 0 { return i }
             default: break
             }
-        }
-        for range in ranges.reversed() {
-            let slice = Data(bytes[range])
-            if let object = (try? JSONSerialization.jsonObject(with: slice)) as? [String: Any] { return object }
         }
         return nil
     }

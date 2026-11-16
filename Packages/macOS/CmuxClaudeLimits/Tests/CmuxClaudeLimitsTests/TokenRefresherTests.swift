@@ -76,13 +76,34 @@ struct TokenRefresherTests {
         #expect(await make(runner).refresh(accountID: "a", configDir: nil) == .loginNeeded("refresh timed out"))
     }
 
+    @Test func launchErrorIsLoginNeeded() async {
+        let runner = FakeProcessRunner(outcome: ProcessOutcome(launchError: "no such file"))
+        #expect(await make(runner).refresh(accountID: "a", configDir: nil) == .loginNeeded("refresh launch failed"))
+    }
+
+    @Test func rateLimitIsPerAccount() async {
+        let runner = FakeProcessRunner(outcome: ProcessOutcome(exitStatus: 0, stdout: Self.clean))
+        let refresher = make(runner)
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .refreshed)
+        #expect(await refresher.refresh(accountID: "b", configDir: nil) == .refreshed)
+        #expect(runner.requests.count == 2)
+    }
+
     @Test func concurrentCallsLaunchOneProcess() async {
         let runner = GatedProcessRunner(outcome: ProcessOutcome(exitStatus: 0, stdout: Self.clean))
         let refresher = make(runner)
         async let first = refresher.refresh(accountID: "a", configDir: nil)
         while runner.requests.isEmpty { await Task.yield() }
         async let second = refresher.refresh(accountID: "a", configDir: nil)
-        while await refresher.joinedCallCount < 1 { await Task.yield() }
+        var spins = 0
+        while await refresher.joinedCallCount < 1 {
+            spins += 1
+            if spins > 100_000 {
+                Issue.record("second caller never joined the in-flight refresh")
+                break
+            }
+            await Task.yield()
+        }
         runner.release()
         #expect(await first == .refreshed)
         #expect(await second == .refreshed)
