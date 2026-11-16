@@ -80,8 +80,7 @@ check_built_app() {
 
 refuse_if_staged_running() {
   local pids
-  # -a: macOS pgrep otherwise skips our ancestors (e.g. run from a terminal in that app).
-  pids=$(pgrep -a -f "$STAGED_APP/Contents/MacOS/cmux" || true)
+  pids=$(fork_tagged_app_pids "$STAGED_APP/Contents/MacOS/cmux")
   if [ -n "$pids" ]; then
     echo "error: the staged app is running (pid $pids); quit it before restaging" >&2
     return 1
@@ -106,6 +105,8 @@ if [ "$SKIP_SETUP" -eq 0 ]; then
 fi
 run xcodebuild "${XCODEBUILD_ARGS[@]}"
 run check_built_app
+# Tagged builds get their own auth URL scheme instead of cmux:// (before signing).
+run fork_apply_url_scheme "$BUILT_APP/Contents/Info.plist" "$TAG"
 run fork_resign "$BUILT_APP" "$FORK_SIGN_IDENTITY" "$ENTITLEMENTS"
 run fork_verify_signature "$BUILT_APP"
 run refuse_if_staged_running
@@ -113,6 +114,10 @@ run mkdir -p "$(dirname "$STAGED_APP")"
 run rm -rf "$STAGED_APP"
 run ditto "$BUILT_APP" "$STAGED_APP"
 run fork_verify_signature "$STAGED_APP"
+# The build registers its products with LaunchServices; keep them out of it so
+# no fork bundle can take cmux:// links or stand in for the installed app.
+run fork_lsunregister "$BUILT_APP"
+run fork_lsunregister "$STAGED_APP"
 if [ "$DRY_RUN" -eq 0 ]; then
   echo "Staged $BUNDLE_ID at $STAGED_APP"
 fi

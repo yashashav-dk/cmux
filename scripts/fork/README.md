@@ -22,17 +22,23 @@ fork-only helper scripts; nothing here is part of the app.
   (Xcode 26, Metal, zig 0.16, rustup, free space; lists other `cmux-*` DerivedData dirs), `scripts/setup.sh`,
   Release `xcodebuild` into `~/Library/Developer/Xcode/DerivedData/cmux-fork`, re-sign with
   `cmux-fork-local` + `cmux.fork.entitlements`, verify, stage. Untagged: bundle id `com.cmuxterm.app`,
-  staged at `~/Applications/cmux-fork-staging/cmux.app`, never launched by tooling. `--tag <t>`: bundle id
-  `com.cmuxterm.app.debug.fork-<t>`, staged at `~/Applications/cmux-fork-staging/<t>/cmux.app`.
+  staged at `~/Library/Application Support/cmux-fork/staging/cmux.app`, never launched by tooling. `--tag <t>`:
+  bundle id `com.cmuxterm.app.debug.fork-<t>`, staged at `~/Library/Application Support/cmux-fork/staging/<t>/cmux.app`,
+  and its `.auth` URL type is rewritten from `cmux` to `cmux-dev-fork-<t>` before signing (as reload.sh does), so
+  a tagged build never claims `cmux://`. Staging is outside `~/Applications`, which LaunchServices indexes on its
+  own, and build.sh unregisters both the DerivedData product and the staged copy from LaunchServices at the end.
   The build passes `OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo`: with Xcode 26.3 the Release build's default
   cross-module optimization crashes swift-frontend (SIL deserialization of `ghostty_surface_clear_selection`,
   declared both in GhosttyKit's header and with `@_silgen_name` in CmuxTerminalCore). Upstream builds with Xcode 26.6.
 - `bash scripts/fork/launch-tagged.sh <t>`: launches a staged tagged build by path through a one-shot
   launchd job running `env -i` with the tag's own `CMUX_TAG`, socket paths and auth scheme. It refuses any
-  bundle whose id is not `com.cmuxterm.app.debug.fork-<t>`. Quit the app from its own menu, then run the
-  printed `launchctl bootout` line.
+  bundle whose id is not `com.cmuxterm.app.debug.fork-<t>`. When the app quits, the job unregisters it from
+  LaunchServices and deletes its launch log dir (kept after a non-zero exit). Quit the app from its own menu,
+  then run `bash scripts/fork/launch-tagged.sh --cleanup <t>` (unloads the job, unregisters, removes the
+  socket and leftover logs).
 - `bash scripts/fork/resign.sh <app> [identity] [entitlements]`: re-sign an app inside-out and verify it.
-- Tests: `bash scripts/fork/tests/test-build-args.sh`, `bash scripts/fork/tests/test-entitlements.sh`.
+- Tests: `bash scripts/fork/tests/test-build-args.sh`, `bash scripts/fork/tests/test-entitlements.sh`,
+  `bash scripts/fork/tests/test-url-scheme.sh`, `bash scripts/fork/tests/test-no-password-argv.sh`.
 
 ## Anchor check at `v0.65.2.2`
 

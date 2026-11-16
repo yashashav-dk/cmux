@@ -64,6 +64,14 @@ else
   echo "ok: untagged omits CMUX_SIDEBAR_EXTENSION_POINT_ID"
 fi
 
+# Staging stays out of ~/Applications, which LaunchServices indexes on its own.
+if [ "$FORK_STAGING_DIR" = "$HOME/Library/Application Support/cmux-fork/staging" ]; then
+  echo "ok: staging dir outside ~/Applications"
+else
+  echo "FAIL: FORK_STAGING_DIR is $FORK_STAGING_DIR"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "test-build-args: FAIL"
   exit 1

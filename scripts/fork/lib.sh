@@ -4,7 +4,9 @@
 FORK_BUNDLE_ID=com.cmuxterm.app
 FORK_DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/cmux-fork"
 FORK_TEST_DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/cmux-fork-tests"
-FORK_STAGING_DIR="$HOME/Applications/cmux-fork-staging"
+# Not ~/Applications: LaunchServices indexes that on its own, so a staged bundle
+# could claim cmux:// or the stable bundle id there.
+FORK_STAGING_DIR="$HOME/Library/Application Support/cmux-fork/staging"
 FORK_BACKUPS_DIR="$HOME/Library/Application Support/cmux-fork/backups"
 FORK_ZIG_BIN=/opt/homebrew/opt/zig@0.16/bin
 FORK_MIN_FREE_GB=${CMUX_FORK_MIN_FREE_GB:-15}
@@ -213,4 +215,51 @@ fork_resign() {
 # fork_verify_signature <app_path>
 fork_verify_signature() {
   codesign --verify --deep --strict --verbose=2 "${1:?app path required}"
+}
+
+FORK_LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+# fork_tag_auth_scheme <tag>: the tag's auth-callback URL scheme (reload.sh's cmux-dev-<slug>).
+fork_tag_auth_scheme() {
+  printf 'cmux-dev-fork-%s\n' "${1:?tag required}"
+}
+
+# fork_apply_url_scheme <info_plist> [tag]: with a tag, point the .auth URL type
+# (CFBundleURLTypes:1) at the tag's scheme so a tagged build never claims cmux://,
+# as reload.sh's set_plist_url_scheme does. Without a tag, only check that it is
+# still cmux. Fails, leaving the file alone, if entry 1 is not the .auth type.
+fork_apply_url_scheme() {
+  local plist="${1:?Info.plist path required}" tag="${2:-}" name current
+  name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:1:CFBundleURLName' "$plist" 2>/dev/null) || name=""
+  case "$name" in
+    *.auth) ;;
+    *) echo "fork_apply_url_scheme: CFBundleURLTypes:1 is '${name:-missing}', not the .auth entry" >&2; return 1 ;;
+  esac
+  if [ -z "$tag" ]; then
+    current=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:1:CFBundleURLSchemes:0' "$plist" 2>/dev/null) || current=""
+    if [ "$current" != "cmux" ]; then
+      echo "fork_apply_url_scheme: untagged build has auth scheme '${current:-missing}', expected cmux" >&2
+      return 1
+    fi
+    return 0
+  fi
+  /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:1:CFBundleURLSchemes:0 $(fork_tag_auth_scheme "$tag")" "$plist"
+}
+
+# fork_lsunregister <app_path>: remove the app and its nested apps from the
+# LaunchServices database (builds and launches register them on their own).
+fork_lsunregister() {
+  local app="${1:?app path required}" nested
+  [ -d "$app" ] || return 0
+  while IFS= read -r -d '' nested; do
+    "$FORK_LSREGISTER" -u "$nested" >/dev/null 2>&1 || true
+  done < <(find "$app/Contents" -type d -name '*.app' -print0 2>/dev/null)
+  "$FORK_LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+}
+
+# fork_tagged_app_pids <executable>: pids running exactly that executable.
+# -a: macOS pgrep otherwise skips our ancestors (e.g. run from a terminal in that app).
+# Anchored so a wrapper whose arguments mention the path does not match.
+fork_tagged_app_pids() {
+  pgrep -a -f "^${1:?executable required}( |\$)" || true
 }
