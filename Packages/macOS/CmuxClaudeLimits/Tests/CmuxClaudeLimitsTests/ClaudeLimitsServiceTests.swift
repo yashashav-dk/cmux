@@ -16,10 +16,13 @@ private struct Harness {
 
     static func token(_ index: Int) -> String { "tok-\(index + 1)" }
 
-    static func configuration(_ accounts: [ClaudeLimitsAccount] = accounts) -> ClaudeLimitsConfiguration {
+    static func configuration(
+        _ accounts: [ClaudeLimitsAccount] = accounts,
+        refreshIntervalSeconds: Int = 300
+    ) -> ClaudeLimitsConfiguration {
         ClaudeLimitsConfiguration(
             enabled: true,
-            refreshIntervalSeconds: 300,
+            refreshIntervalSeconds: refreshIntervalSeconds,
             claudeBinary: "~/.local/bin/claude",
             mutedColor: "#a89984",
             accounts: accounts
@@ -236,6 +239,21 @@ private func record(_ service: ClaudeLimitsService) -> (Recorder<[String: Accoun
         await h.settle(timers: 1)
         #expect(h.runner.requests.count == 1)
         #expect(await h.states()[relative.id] == .loginNeeded(detail: "relative/dir"))
+    }
+
+    @Test func intervalBelowMinimumIsClampedAndReconfigureAppliesNewInterval() async {
+        let h = Harness(configuration: Harness.configuration(refreshIntervalSeconds: 30))
+        await h.startAndFireLaunchTimers()
+        await waitUntil("all accounts ok") { await h.allOK(Harness.ids) }
+        await h.settle()
+        #expect(h.clock.pendingDeadlines == Array(repeating: .seconds(65), count: 4))
+
+        await h.service.reconfigure(Harness.configuration(refreshIntervalSeconds: 600))
+        await waitUntil("rebuilt launch timers") { h.clock.pendingDeadlines == Array(repeating: .seconds(10), count: 4) }
+        h.clock.advance(by: .seconds(5))
+        await waitUntil("refetched") { h.transport.requests.count == 8 }
+        await h.settle()
+        #expect(h.clock.pendingDeadlines == Array(repeating: .seconds(610), count: 4))
     }
 
     @Test func stopCancelsTimersAndIgnoresTriggers() async {
