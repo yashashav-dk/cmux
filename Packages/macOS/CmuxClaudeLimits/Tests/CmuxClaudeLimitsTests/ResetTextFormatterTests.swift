@@ -54,4 +54,25 @@ import Testing
         #expect(f.tooltip(for: w, lastFetched: iso("2026-11-14T19:58:00Z"), now: now)
             == "Resets in 47m · 42% used · fetched 2m ago")
     }
+
+    @Test func tooltipUsesInjectedAgeStrings() {
+        let strings = ResetTextStrings(
+            idle: "idle", reset: "reset", inFormat: "in %@",
+            tooltipFormat: "Resets %@ · %@ used · fetched %@",
+            justNow: "gerade eben", agoFormat: "vor %@"
+        )
+        let f = ResetTextFormatter(timeZone: TimeZone(identifier: "America/Los_Angeles")!, strings: strings)
+        let w = UsageWindow(kind: .session, percent: 10, resetsAt: now + 47 * 60)
+        #expect(f.tooltip(for: w, lastFetched: now - 5, now: now).hasSuffix("fetched gerade eben"))
+        #expect(f.tooltip(for: w, lastFetched: now - 120, now: now).hasSuffix("fetched vor 2m"))
+    }
+
+    @Test func tooltipNeverTrapsOnOddPercents() {
+        let f = fmt("America/Los_Angeles")
+        let cases: [(Double, String)] = [(.nan, "0%"), (.infinity, "0%"), (-.infinity, "0%"), (1e300, "100%"), (-5, "0%"), (150, "100%")]
+        for (percent, expected) in cases {
+            let w = UsageWindow(kind: .session, percent: percent, resetsAt: now + 60)
+            #expect(f.tooltip(for: w, lastFetched: now, now: now).contains(" \(expected) used"), "percent \(percent)")
+        }
+    }
 }

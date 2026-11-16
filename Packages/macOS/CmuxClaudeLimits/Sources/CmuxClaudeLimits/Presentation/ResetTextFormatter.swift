@@ -5,8 +5,19 @@ public struct ResetTextStrings: Sendable, Equatable {
     public var reset: String
     public var inFormat: String
     public var tooltipFormat: String
+    public var justNow: String
+    public var agoFormat: String
 
-    public init(idle: String, reset: String, inFormat: String, tooltipFormat: String) {
+    public init(
+        idle: String,
+        reset: String,
+        inFormat: String,
+        tooltipFormat: String,
+        justNow: String = "just now",
+        agoFormat: String = "%@ ago"
+    ) {
+        self.justNow = justNow
+        self.agoFormat = agoFormat
         self.idle = idle
         self.reset = reset
         self.inFormat = inFormat
@@ -17,7 +28,9 @@ public struct ResetTextStrings: Sendable, Equatable {
         idle: "idle",
         reset: "reset",
         inFormat: "in %@",
-        tooltipFormat: "Resets %@ · %@ used · fetched %@"
+        tooltipFormat: "Resets %@ · %@ used · fetched %@",
+        justNow: "just now",
+        agoFormat: "%@ ago"
     )
 }
 
@@ -53,15 +66,21 @@ public struct ResetTextFormatter: Sendable {
     }
 
     public func tooltip(for window: UsageWindow, lastFetched: Date, now: Date) -> String {
-        let percent = "\(Int(window.percent.rounded()))%"
+        let percent = "\(displayPercent(window.percent))%"
         let fetchedAge = max(0, now.timeIntervalSince(lastFetched))
         let fetched: String
         if fetchedAge < 60 {
-            fetched = "just now"
+            fetched = strings.justNow
         } else {
-            fetched = "\(duration(fetchedAge)) ago"
+            fetched = String(format: strings.agoFormat, duration(fetchedAge))
         }
         return String(format: strings.tooltipFormat, text(for: window, now: now), percent, fetched)
+    }
+
+    /// Non-finite values display as 0; finite values clamp to 0...100 before conversion.
+    private func displayPercent(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(100, max(0, value)).rounded())
     }
 
     private func duration(_ interval: TimeInterval) -> String {
