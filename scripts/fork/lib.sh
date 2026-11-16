@@ -144,6 +144,9 @@ fork_xcodebuild_args() {
   # app module. Upstream CI builds with Xcode 26.6; re-check after upgrading.
   # shellcheck disable=SC2016 # $(inherited) is an Xcode build-setting reference
   printf '%s\n' 'OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo'
+  # Apple Silicon only: the project's Release default builds arm64 and x86_64
+  # (ONLY_ACTIVE_ARCH=NO), which doubles build time and size for no benefit here.
+  printf '%s\n' 'ARCHS=arm64'
 }
 
 # fork_require_sign_identity <identity>: fail unless the certificate exists in
@@ -262,4 +265,32 @@ fork_lsunregister() {
 # Anchored so a wrapper whose arguments mention the path does not match.
 fork_tagged_app_pids() {
   pgrep -a -f "^${1:?executable required}( |\$)" || true
+}
+
+# fork_version_args <pbxproj_path>: prints the fork version overrides, one per line:
+# CURRENT_PROJECT_VERSION=<upstream build + 10000> and MARKETING_VERSION=<upstream>-fork.
+fork_version_args() {
+  local pbx="${1:?pbxproj path required}" build marketing
+  build=$(sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION = \([0-9][0-9]*\);.*/\1/p' "$pbx" | head -n 1)
+  marketing=$(sed -n 's/^[[:space:]]*MARKETING_VERSION = \([^;]*\);.*/\1/p' "$pbx" | head -n 1)
+  if [ -z "$build" ] || [ -z "$marketing" ]; then
+    echo "fork_version_args: no CURRENT_PROJECT_VERSION/MARKETING_VERSION in $pbx" >&2
+    return 1
+  fi
+  printf 'CURRENT_PROJECT_VERSION=%s\n' "$((build + 10000))"
+  printf 'MARKETING_VERSION=%s-fork\n' "$marketing"
+}
+
+# fork_assert_updater_disabled <repo_root>: static guard that the policy wiring is
+# intact. The behavioral proof is the app-target test lane run by sync.sh.
+fork_assert_updater_disabled() {
+  local root="${1:-.}"
+  if ! grep -qF 'isDisabledByPolicy: ForkBuildPolicy.isUpdaterDisabled' "$root/Sources/AppDelegate.swift"; then
+    echo "updater guard: Sources/AppDelegate.swift no longer uses ForkBuildPolicy.isUpdaterDisabled" >&2
+    return 1
+  fi
+  if ! grep -qF 'var updaterDisabled: Bool { true }' "$root/Sources/Fork/ForkBuildPolicy.swift" 2>/dev/null; then
+    echo "updater guard: Sources/Fork/ForkBuildPolicy.swift does not hard-disable the updater" >&2
+    return 1
+  fi
 }

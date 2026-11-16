@@ -43,13 +43,15 @@ PRODUCT_BUNDLE_IDENTIFIER=com.cmuxterm.app.debug.fork-spike
 $signing
 CMUX_SIDEBAR_EXTENSION_POINT_ID=com.cmuxterm.app.debug.fork-spike.cmux.sidebar
 CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use
-$no_cmo"
+$no_cmo
+ARCHS=arm64"
 
 expected_untagged="$common
 PRODUCT_BUNDLE_IDENTIFIER=com.cmuxterm.app
 $signing
 CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use
-$no_cmo"
+$no_cmo
+ARCHS=arm64"
 
 tagged="$(fork_xcodebuild_args com.cmuxterm.app.debug.fork-spike spike 2>&1)"
 expect_list "tagged args" "$expected_tagged" "$tagged"
