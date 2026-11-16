@@ -17,7 +17,9 @@ public actor ClaudeLimitsService {
 
     private var configuration: ClaudeLimitsConfiguration
     private var scheduler: RefreshScheduler
-    private var refresher: TokenRefresher
+    /// One instance for the service's lifetime: its tripped-guard set, per-account
+    /// rate limit and in-flight refresh must survive every reconfigure.
+    private let refresher: TokenRefresher
     private var refresherBinary: String
     private var order: [String]
     private var slots: [String: AccountSlot]
@@ -31,6 +33,7 @@ public actor ClaudeLimitsService {
     private(set) var droppedLateResults = 0
     private(set) var fetchesStarted = 0
     var inFlightCount: Int { slots.values.filter { $0.fetchToken != nil }.count }
+    var tokenRefresher: TokenRefresher { refresher }
 
     public init(
         configuration: ClaudeLimitsConfiguration,
@@ -43,7 +46,13 @@ public actor ClaudeLimitsService {
         self.configuration = configuration
         self.scheduler = RefreshScheduler(interval: configuration.effectiveRefreshInterval)
         let binary = ClaudeBinaryPath.expand(configuration.claudeBinary, home: dependencies.home)
-        let refresher = Self.makeRefresher(binary: binary, dependencies: dependencies)
+        let refresher = TokenRefresher(
+            runner: dependencies.runner,
+            claudeBinary: binary,
+            workingDirectory: dependencies.refreshWorkingDirectory,
+            environment: dependencies.environment,
+            now: dependencies.now
+        )
         self.refresherBinary = binary
         self.refresher = refresher
         let built = AccountSlotSet(accounts: configuration.accounts, dependencies: dependencies, refresher: refresher)
@@ -102,7 +111,8 @@ public actor ClaudeLimitsService {
 
     /// Cancels and rebuilds every account's pipeline in the new configuration order.
     /// Removed accounts disappear from `states` for good; kept accounts keep their card.
-    /// The token refresher (and its guard and rate limit) survives unless the binary changes.
+    /// The token refresher is never replaced: a new `claudeBinary` only changes the
+    /// executable for future launches, keeping its guard, rate limit and in-flight refresh.
     public func reconfigure(_ newConfiguration: ClaudeLimitsConfiguration) async {
         guard newConfiguration != configuration else { return }
         for id in order {
@@ -110,11 +120,6 @@ public actor ClaudeLimitsService {
         }
         configuration = newConfiguration
         scheduler = RefreshScheduler(interval: newConfiguration.effectiveRefreshInterval)
-        let binary = ClaudeBinaryPath.expand(newConfiguration.claudeBinary, home: dependencies.home)
-        if binary != refresherBinary {
-            refresher = Self.makeRefresher(binary: binary, dependencies: dependencies)
-            refresherBinary = binary
-        }
         let built = AccountSlotSet(accounts: newConfiguration.accounts, dependencies: dependencies, refresher: refresher)
         var nextStates: [String: AccountCardState] = [:]
         for id in built.order {
@@ -132,6 +137,13 @@ public actor ClaudeLimitsService {
             for id in order {
                 schedule(id, after: scheduler.initialDelay)
             }
+        }
+        // Last, so no state changes after this suspension point. `refresherBinary` is
+        // updated first, so overlapping reconfigures send their paths in call order.
+        let binary = ClaudeBinaryPath.expand(newConfiguration.claudeBinary, home: dependencies.home)
+        if binary != refresherBinary {
+            refresherBinary = binary
+            await refresher.setClaudeBinary(binary)
         }
     }
 
@@ -218,16 +230,6 @@ public actor ClaudeLimitsService {
     private func nextToken() -> Int {
         lastToken += 1
         return lastToken
-    }
-
-    private static func makeRefresher(binary: String, dependencies: ClaudeLimitsDependencies) -> TokenRefresher {
-        TokenRefresher(
-            runner: dependencies.runner,
-            claudeBinary: binary,
-            workingDirectory: dependencies.refreshWorkingDirectory,
-            environment: dependencies.environment,
-            now: dependencies.now
-        )
     }
 
     /// Clamped to `0...maximumDelay` so a huge `Retry-After` cannot overflow `Duration`.

@@ -5,7 +5,7 @@ import CMUXDebugLog
 /// (`claude -p "/usage" --output-format json`), which costs zero turns.
 public actor TokenRefresher {
     private let runner: any ProcessRunning
-    private let claudeBinary: String
+    private var claudeBinary: String
     private let workingDirectory: String
     private let environment: RefreshEnvironment
     private let now: @Sendable () -> Date
@@ -35,6 +35,13 @@ public actor TokenRefresher {
         self.now = now
         self.minimumInterval = minimumInterval
         self.timeout = timeout
+    }
+
+    /// Changes the executable for future launches only. Disabled accounts, the
+    /// per-account rate limit and any in-flight refresh are kept, so a config reload
+    /// can never re-enable a tripped guard or start a second concurrent refresh.
+    public func setClaudeBinary(_ path: String) {
+        claudeBinary = path
     }
 
     public func refresh(accountID: String, configDir: String?) async -> RefreshOutcome {

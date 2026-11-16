@@ -16,14 +16,18 @@ private struct Harness {
 
     static func token(_ index: Int) -> String { "tok-\(index + 1)" }
 
+    static let defaultBinary = "/Users/test/.local/bin/claude"
+    static let nextBinary = "/opt/claude-next/claude"
+
     static func configuration(
         _ accounts: [ClaudeLimitsAccount] = accounts,
-        refreshIntervalSeconds: Int = 300
+        refreshIntervalSeconds: Int = 300,
+        claudeBinary: String = "~/.local/bin/claude"
     ) -> ClaudeLimitsConfiguration {
         ClaudeLimitsConfiguration(
             enabled: true,
             refreshIntervalSeconds: refreshIntervalSeconds,
-            claudeBinary: "~/.local/bin/claude",
+            claudeBinary: claudeBinary,
             mutedColor: "#a89984",
             accounts: accounts
         )
@@ -31,6 +35,8 @@ private struct Harness {
 
     let clock = TestClock()
     let runner: FakeProcessRunner
+    /// Present when refreshes are gated: `claude` launches suspend until released.
+    let gate: GatedProcessRunner?
     let transport: FakeUsageTransport
     let service: ClaudeLimitsService
 
@@ -38,6 +44,7 @@ private struct Harness {
         security: [Int: [ProcessOutcome]] = [:],
         replies: [String: [FakeUsageTransport.Reply]] = [:],
         extraProcessScript: [String: [ProcessOutcome]] = [:],
+        gateRefreshes: Bool = false,
         configuration: ClaudeLimitsConfiguration = Harness.configuration()
     ) {
         let clock = self.clock
@@ -47,9 +54,10 @@ private struct Harness {
             script[FakeProcessRunner.securityKey(configDir: dir)] = security[index] ?? [fallback]
         }
         runner = FakeProcessRunner(script: script)
+        gate = gateRefreshes ? GatedProcessRunner(wrapping: runner) { $0.executable != "/usr/bin/security" } : nil
         transport = FakeUsageTransport(script: replies, fallback: .http(200, body: UsageFixtures.teamActive))
         let dependencies = ClaudeLimitsDependencies(
-            runner: runner,
+            runner: gate ?? runner,
             transport: transport,
             home: Self.home,
             environment: RefreshEnvironment(home: Self.home, user: "test", logname: "test", tmpdir: "/tmp", lang: nil),
@@ -254,6 +262,105 @@ private func record(_ service: ClaudeLimitsService) -> (Recorder<[String: Accoun
         await waitUntil("refetched") { h.transport.requests.count == 8 }
         await h.settle()
         #expect(h.clock.pendingDeadlines == Array(repeating: .seconds(610), count: 4))
+    }
+
+    @Test func trippedGuardSurvivesBinaryChange() async {
+        let h = Harness(
+            replies: ["tok-1": [.http(401, body: UsageFixtures.expiredToken)]],
+            extraProcessScript: [Harness.defaultBinary: [CredentialFixtures.tripped], Harness.nextBinary: [CredentialFixtures.clean]],
+            configuration: Harness.configuration([Harness.accounts[0]])
+        )
+        let id = Harness.ids[0]
+        await h.startAndFireLaunchTimers(expectedTimers: 1)
+        await waitUntil("guard tripped") { await h.states()[id] == .loginNeeded(detail: "~/.claude") }
+        await h.settle(timers: 1)
+        #expect(h.runner.requests(forKey: Harness.defaultBinary).count == 1)
+
+        await h.service.reconfigure(Harness.configuration([Harness.accounts[0]], claudeBinary: Harness.nextBinary))
+        await waitUntil("rebuilt launch timer") { h.clock.pendingDeadlines == [.seconds(10)] }
+        h.clock.advance(by: .seconds(5))
+        await waitUntil("second GET") { h.transport.requests.count == 2 }
+        await h.settle(timers: 1)
+        #expect(await h.states()[id] == .loginNeeded(detail: "~/.claude"))
+        #expect(h.runner.requests(forKey: Harness.defaultBinary).count == 1)
+        #expect(h.runner.requests(forKey: Harness.nextBinary).isEmpty)
+        #expect(h.transport.requests.count == 2)
+    }
+
+    @Test func refreshInFlightAcrossBinaryChangeLaunchesOneProcess() async {
+        let expiry = Date(timeIntervalSince1970: 1_800_086_400)
+        let h = Harness(
+            security: [0: [
+                CredentialFixtures.credentials(token: "old", expiresAt: expiry),
+                CredentialFixtures.credentials(token: "old", expiresAt: expiry),
+                CredentialFixtures.credentials(token: "fresh", expiresAt: expiry),
+            ]],
+            replies: ["old": [.http(401, body: UsageFixtures.expiredToken)]],
+            extraProcessScript: [Harness.defaultBinary: [CredentialFixtures.clean], Harness.nextBinary: [CredentialFixtures.clean]],
+            gateRefreshes: true,
+            configuration: Harness.configuration([Harness.accounts[0]])
+        )
+        let id = Harness.ids[0]
+        await h.startAndFireLaunchTimers(expectedTimers: 1)
+        await waitUntil("refresh launched") { h.gate?.pendingCount == 1 }
+        #expect(await h.states()[id] == .refreshingLogin)
+
+        await h.service.reconfigure(Harness.configuration([Harness.accounts[0]], claudeBinary: Harness.nextBinary))
+        #expect(await h.states()[id] == .loading)
+        await waitUntil("rebuilt launch timer") { h.clock.pendingDeadlines == [.seconds(10)] }
+        h.clock.advance(by: .seconds(5))
+        await waitUntil("second caller joined the in-flight refresh") {
+            await h.service.tokenRefresher.joinedCallCount == 1
+        }
+        h.gate?.release()
+
+        await waitUntil("account ok") { await h.allOK([id]) }
+        await h.settle(timers: 1)
+        await waitUntil("cancelled fetch dropped") { await h.service.droppedLateResults == 1 }
+        let launches = h.runner.requests.filter { $0.executable != "/usr/bin/security" }
+        #expect(launches.map(\.executable) == [Harness.defaultBinary])
+    }
+
+    @Test func nextLaunchAfterBinaryChangeUsesNewPathAndKeepsRateLimit() async {
+        let expiry = Date(timeIntervalSince1970: 1_800_086_400)
+        let ok = FakeUsageTransport.Reply.http(200, body: UsageFixtures.teamActive)
+        let expired = FakeUsageTransport.Reply.http(401, body: UsageFixtures.expiredToken)
+        let h = Harness(
+            security: [0: [
+                CredentialFixtures.credentials(token: "old", expiresAt: expiry),
+                CredentialFixtures.credentials(token: "fresh", expiresAt: expiry),
+            ]],
+            replies: ["old": [expired], "fresh": [ok, ok, expired]],
+            extraProcessScript: [Harness.defaultBinary: [CredentialFixtures.clean], Harness.nextBinary: [CredentialFixtures.clean]],
+            configuration: Harness.configuration([Harness.accounts[0]])
+        )
+        let id = Harness.ids[0]
+        // t=5: 401, refresh with the original binary, retry ok.
+        await h.startAndFireLaunchTimers(expectedTimers: 1)
+        await waitUntil("first fetch ok") { await h.allOK([id]) }
+        await h.settle(timers: 1)
+        #expect(h.transport.requests.count == 2)
+
+        // t=10: the rebuilt pipeline fetches without refreshing.
+        await h.service.reconfigure(Harness.configuration([Harness.accounts[0]], claudeBinary: Harness.nextBinary))
+        await waitUntil("rebuilt launch timer") { h.clock.pendingDeadlines == [.seconds(10)] }
+        h.clock.advance(by: .seconds(5))
+        await waitUntil("refetched") { h.transport.requests.count == 3 }
+        await h.settle(timers: 1)
+
+        // t=310: 401, but the 10-minute limit from the t=5 launch still holds.
+        h.clock.advance(by: .seconds(300))
+        await waitUntil("timer fetch") { h.transport.requests.count == 4 }
+        await h.settle(timers: 1)
+        #expect(await h.states()[id] == .loginNeeded(detail: "~/.claude"))
+        #expect(h.runner.requests(forKey: Harness.nextBinary).isEmpty)
+        #expect(h.clock.pendingDeadlines == [.seconds(605)])
+
+        // t=605: refresh is allowed again and launches the new binary.
+        h.clock.advance(by: .seconds(295))
+        await waitUntil("refresh with new binary") { h.runner.requests(forKey: Harness.nextBinary).count == 1 }
+        await h.settle(timers: 1)
+        #expect(h.runner.requests(forKey: Harness.defaultBinary).count == 1)
     }
 
     @Test func stopCancelsTimersAndIgnoresTriggers() async {

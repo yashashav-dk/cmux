@@ -15,6 +15,22 @@ import Testing
         #expect(request?.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
         #expect(request?.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(request?.timeoutInterval == 15)
+        #expect(request?.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData)
+        #expect(request?.httpShouldHandleCookies == false)
+    }
+
+    @Test func defaultTransportNeverCachesOrStoresCredentials() {
+        let configuration = URLSessionUsageTransport().session.configuration
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.httpCookieStorage == nil)
+        #expect(configuration.urlCredentialStorage == nil)
+        #expect(configuration.requestCachePolicy == .reloadIgnoringLocalAndRemoteCacheData)
+        #expect(configuration.httpShouldSetCookies == false)
+    }
+
+    @Test func eachDefaultTransportOwnsItsSession() {
+        #expect(URLSessionUsageTransport().session !== URLSessionUsageTransport().session)
+        #expect(URLSessionUsageTransport().session !== URLSession.shared)
     }
 
     @Test func customTimeout() async {

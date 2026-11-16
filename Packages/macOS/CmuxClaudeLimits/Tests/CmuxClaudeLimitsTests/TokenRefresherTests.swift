@@ -109,4 +109,44 @@ struct TokenRefresherTests {
         #expect(await second == .refreshed)
         #expect(runner.requests.count == 1)
     }
+
+    @Test func binaryChangeKeepsDisabledAccounts() async {
+        let tripped = Data(#"{"is_error":false,"num_turns":2,"total_cost_usd":0}"#.utf8)
+        let runner = FakeProcessRunner(outcome: ProcessOutcome(exitStatus: 0, stdout: tripped))
+        let clock = Clock()
+        let refresher = make(runner, clock: clock)
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .guardTripped("num_turns=2"))
+        await refresher.setClaudeBinary("/opt/claude-next/claude")
+        clock.advance(100_000)
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .disabled)
+        #expect(runner.requests.count == 1)
+    }
+
+    @Test func binaryChangeKeepsInFlightRefresh() async {
+        let runner = GatedProcessRunner(outcome: ProcessOutcome(exitStatus: 0, stdout: Self.clean))
+        let refresher = make(runner)
+        async let first = refresher.refresh(accountID: "a", configDir: nil)
+        await waitUntil("refresh launched") { runner.pendingCount == 1 }
+        await refresher.setClaudeBinary("/opt/claude-next/claude")
+        async let second = refresher.refresh(accountID: "a", configDir: nil)
+        await waitUntil("second caller joined") { await refresher.joinedCallCount == 1 }
+        runner.release()
+        #expect(await first == .refreshed)
+        #expect(await second == .refreshed)
+        #expect(runner.requests.map(\.executable) == ["/Users/test/.local/bin/claude"])
+    }
+
+    @Test func binaryChangeAppliesToNextLaunchAndKeepsRateLimit() async {
+        let clock = Clock()
+        let runner = FakeProcessRunner(outcome: ProcessOutcome(exitStatus: 0, stdout: Self.clean))
+        let refresher = make(runner, clock: clock)
+        let first = clock.now
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .refreshed)
+        await refresher.setClaudeBinary("/opt/claude-next/claude")
+        clock.advance(100)
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .rateLimited(nextAllowedAt: first.addingTimeInterval(600)))
+        clock.advance(501)
+        #expect(await refresher.refresh(accountID: "a", configDir: nil) == .refreshed)
+        #expect(runner.requests.map(\.executable) == ["/Users/test/.local/bin/claude", "/opt/claude-next/claude"])
+    }
 }
