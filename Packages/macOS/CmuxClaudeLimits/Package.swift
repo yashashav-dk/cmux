@@ -26,6 +26,7 @@ let package = Package(
                 "CmuxSettings",
                 .product(name: "CMUXDebugLog", package: "CMUXDebugLog"),
             ],
+            resources: [.process("Resources")],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
                 .enableUpcomingFeature("ExistentialAny"),
