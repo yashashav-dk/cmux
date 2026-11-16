@@ -119,6 +119,70 @@
         ]
       }
     },
+    "claudeLimits": {
+      "x-cmux-scopes": ["global"],
+      "title": "claudeLimits",
+      "description": "Per-account Claude usage limits shown in the sidebar footer.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the Claude usage limits panel in the sidebar."
+        },
+        "refreshIntervalSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "default": 300,
+          "description": "Seconds between usage refreshes for each account. Minimum 60."
+        },
+        "claudeBinary": {
+          "type": "string",
+          "default": "~/.local/bin/claude",
+          "description": "Absolute path to the real Claude CLI used to refresh expired credentials. Must not be the cmux shim."
+        },
+        "mutedColor": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "default": "#a89984",
+          "description": "Hex color (#RRGGBB) used for muted text in the panel."
+        },
+        "accounts": {
+          "type": "array",
+          "default": [],
+          "description": "Claude accounts to show, one card per entry.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label"],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name shown for the account."
+              },
+              "configDir": {
+                "type": ["string", "null"],
+                "default": null,
+                "description": "The account's Claude config directory. null or omitted means the default profile."
+              },
+              "style": {
+                "type": "string",
+                "enum": ["badge", "solo"],
+                "default": "solo",
+                "description": "How the label is drawn: a colored badge or plain text."
+              },
+              "color": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "description": "Hex color (#RRGGBB) for the badge."
+              }
+            }
+          }
+        }
+      }
+    },
     "computerUse": {
       "x-cmux-scopes": ["global"],
       "title": "computerUse",

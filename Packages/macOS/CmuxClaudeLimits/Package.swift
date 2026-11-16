@@ -34,7 +34,11 @@ let package = Package(
         ),
         .testTarget(
             name: "CmuxClaudeLimitsTests",
-            dependencies: ["CmuxClaudeLimits"]
+            dependencies: [
+                "CmuxClaudeLimits",
+                .product(name: "CmuxFoundation", package: "CmuxFoundation"),
+                .product(name: "CmuxSettings", package: "CmuxSettings"),
+            ]
         ),
     ]
 )
