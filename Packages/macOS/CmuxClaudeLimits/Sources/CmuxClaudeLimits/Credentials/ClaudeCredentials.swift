@@ -1,6 +1,6 @@
 public import Foundation
 
-public struct ClaudeCredentials: Sendable, Equatable, CustomDebugStringConvertible {
+public struct ClaudeCredentials: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public var accessToken: String
     public var refreshToken: String?
     public var expiresAt: Date?
@@ -11,5 +11,7 @@ public struct ClaudeCredentials: Sendable, Equatable, CustomDebugStringConvertib
         self.expiresAt = expiresAt
     }
 
-    public var debugDescription: String { "ClaudeCredentials(<redacted>)" }
+    public var description: String { "ClaudeCredentials(<redacted>)" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { Mirror(self, children: [], displayStyle: .struct) }
 }
