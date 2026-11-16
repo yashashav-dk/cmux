@@ -57,6 +57,10 @@ XCODEBUILD_ARGS=()
 while IFS= read -r arg; do
   XCODEBUILD_ARGS+=("$arg")
 done < <(fork_xcodebuild_args "$BUNDLE_ID" "$TAG")
+# Fork version: upstream build + 10000, marketing version suffixed -fork.
+while IFS= read -r arg; do
+  XCODEBUILD_ARGS+=("$arg")
+done < <(fork_version_args "$(cd "$here/../.." && pwd)/cmux.xcodeproj/project.pbxproj")
 XCODEBUILD_ARGS+=(build)
 
 run() {
@@ -98,6 +102,7 @@ fi
 cd "$REPO_ROOT"
 export PATH="$NEW_PATH"
 
+run fork_assert_updater_disabled "$REPO_ROOT"
 run fork_preflight
 run fork_require_sign_identity "$FORK_SIGN_IDENTITY"
 if [ "$SKIP_SETUP" -eq 0 ]; then

@@ -27,6 +27,11 @@ fork-only helper scripts; nothing here is part of the app.
   and its `.auth` URL type is rewritten from `cmux` to `cmux-dev-fork-<t>` before signing (as reload.sh does), so
   a tagged build never claims `cmux://`. Staging is outside `~/Applications`, which LaunchServices indexes on its
   own, and build.sh unregisters both the DerivedData product and the staged copy from LaunchServices at the end.
+  The build passes `ARCHS=arm64`: the project's Release configuration defaults to arm64 + x86_64
+  (`ONLY_ACTIVE_ARCH = NO`, no `ARCHS` override), and the fork only targets Apple Silicon, so this
+  halves compile and link work. It also sets `CURRENT_PROJECT_VERSION` to upstream build + 10000 and
+  `MARKETING_VERSION` to `<upstream>-fork` (read from the pbxproj by `fork_version_args`), and
+  `fork_assert_updater_disabled` fails the build if the updater policy wiring is reverted.
   The build passes `OTHER_SWIFT_FLAGS=$(inherited) -disable-cmo`: with Xcode 26.3 the Release build's default
   cross-module optimization crashes swift-frontend (SIL deserialization of `ghostty_surface_clear_selection`,
   declared both in GhosttyKit's header and with `@_silgen_name` in CmuxTerminalCore). Upstream builds with Xcode 26.6.
@@ -38,7 +43,17 @@ fork-only helper scripts; nothing here is part of the app.
   socket and leftover logs).
 - `bash scripts/fork/resign.sh <app> [identity] [entitlements]`: re-sign an app inside-out and verify it.
 - Tests: `bash scripts/fork/tests/test-build-args.sh`, `bash scripts/fork/tests/test-entitlements.sh`,
-  `bash scripts/fork/tests/test-url-scheme.sh`, `bash scripts/fork/tests/test-no-password-argv.sh`.
+  `bash scripts/fork/tests/test-url-scheme.sh`, `bash scripts/fork/tests/test-no-password-argv.sh`, `bash scripts/fork/tests/test-version-args.sh`.
+
+## Updater and telemetry
+
+- Sparkle is disabled in code: `Sources/AppDelegate.swift` passes `ForkBuildPolicy.isUpdaterDisabled`
+  (`Sources/Fork/ForkBuildPolicy.swift`, always true) as the `isDisabledByPolicy` closure, so no check is
+  scheduled or performed. "Check for Updates" in the app menu and the menu bar extra is relabelled
+  "Updates: run scripts/fork/sync.sh". Fork updates come from `sync.sh`.
+- Telemetry: the fork reports its version `0.65.2-fork` to upstream's PostHog when
+  `app.sendAnonymousTelemetry` is on. Recommended: set it to `false` in `~/.config/cmux/cmux.json`.
+  No code change (keeps the touch surface minimal).
 
 ## Anchor check at `v0.65.2.2`
 

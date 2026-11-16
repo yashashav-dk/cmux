@@ -989,7 +989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         log: updateLog,
         // `DisableAutoUpdate` (MDM): the updater never starts and manual checks
         // are suppressed while forced; `managedAutoUpdateAllowsCheck()` explains.
-        isDisabledByPolicy: { ManagedDevicePolicy().isEnforced(.disableAutoUpdate) }
+        isDisabledByPolicy: ForkBuildPolicy.isUpdaterDisabled
     )
     private let titlebarControlsLayoutModel = TitlebarControlsLayoutModel()
     private lazy var titlebarAccessoryController = UpdateTitlebarAccessoryController(
